@@ -1,0 +1,75 @@
+version: "3"
+
+# Convention: task <orchestrator>:<coder>
+# Single name = same model for all roles
+
+tasks:
+  default:
+    desc: Run with Ling (all roles)
+    cmds:
+      - code-factory -p ling
+
+  ling:
+    desc: Ling for all roles (port 8081)
+    cmds:
+      - code-factory -p ling
+
+  qwen:
+    desc: Qwen for all roles (port 8082)
+    cmds:
+      - code-factory -p qwen
+
+  deepseek:
+    desc: DeepSeek for all roles
+    cmds:
+      - code-factory -p deepseek
+    preconditions:
+      - sh: test -n "$CODE_FACTORY_DEEPSEEK_API_KEY"
+        msg: "Set CODE_FACTORY_DEEPSEEK_API_KEY first"
+
+  # Mixed: task <orchestrator>:<coder>
+  ling:qwen:
+    desc: Ling orchestrator + Qwen coder
+    env:
+      CODE_FACTORY_MODEL_CODER: "qwen:qwen3-59b"
+    cmds:
+      - code-factory -p ling
+
+  ling:deepseek:
+    desc: Ling orchestrator + DeepSeek coder
+    env:
+      CODE_FACTORY_MODEL_CODER: "deepseek:deepseek-chat"
+    cmds:
+      - code-factory -p ling
+    preconditions:
+      - sh: test -n "$CODE_FACTORY_DEEPSEEK_API_KEY"
+        msg: "Set CODE_FACTORY_DEEPSEEK_API_KEY first"
+
+  deepseek:qwen:
+    desc: DeepSeek orchestrator + Qwen coder
+    env:
+      CODE_FACTORY_MODEL_CODER: "qwen:qwen3-59b"
+    cmds:
+      - code-factory -p deepseek
+    preconditions:
+      - sh: test -n "$CODE_FACTORY_DEEPSEEK_API_KEY"
+        msg: "Set CODE_FACTORY_DEEPSEEK_API_KEY first"
+
+  # Custom flags
+  run:
+    desc: "Custom: task run -- -p qwen -m openai-chat:my-model"
+    cmds:
+      - code-factory {{.CLI_ARGS}}
+
+  # Utility
+  install:
+    desc: Install code-factory in editable mode
+    cmds:
+      - pip install -e .
+
+  vault:
+    desc: Show vault git log
+    cmds:
+      - git -C {{.VAULT_PATH}} log --oneline -20
+    vars:
+      VAULT_PATH: ~/Documents/dev/code-factory-repo

@@ -1,13 +1,14 @@
 from pydantic_ai import Agent
 from pydantic_ai.settings import ModelSettings
 
-from ..config import get_settings, resolve_model
+from ..config import Settings, get_settings, resolve_model
 from ..sandbox.host_functions import HOST_FUNCTION_DESCRIPTIONS
 
 
-def build_researcher() -> Agent:
+def build_researcher(settings: "Settings | None" = None) -> Agent:
     fn_docs = "\n".join(f"- {desc}" for desc in HOST_FUNCTION_DESCRIPTIONS.values())
-    settings = get_settings()
+    if settings is None:
+        settings = get_settings()
     return Agent(
         resolve_model(settings.model_researcher, settings),
         output_type=str,

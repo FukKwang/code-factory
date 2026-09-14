@@ -26,13 +26,13 @@ Requirements: Python 3.11+
 ## Quick Start
 
 ```bash
-# Local model (llama.cpp on port 8081)
+# Ling 3.0 (llama.cpp on port 8081)
 code-factory
 
 # DeepSeek API
 CODE_FACTORY_DEEPSEEK_API_KEY=sk-... code-factory -p deepseek
 
-# Qwen on local llama.cpp (port 8082)
+# Qwen 3.5 9B (llama.cpp on port 8082)
 code-factory -p qwen
 
 # Override model for all roles
@@ -43,14 +43,14 @@ code-factory -m "openai-chat:my-model"
 
 | Flag | Description |
 |------|-------------|
-| `-p`, `--provider` | Provider preset: `local`, `deepseek`, `qwen` |
+| `-p`, `--provider` | Provider preset: `ling`, `deepseek`, `qwen` |
 | `-m`, `--model` | Override model string for all agent roles |
 
 ## Provider Presets
 
 | Preset | Model | Endpoint | Max Tokens |
 |--------|-------|----------|------------|
-| `local` (default) | `openai-chat:ling-3.0-tiny` | `localhost:8081/v1` | 32768 |
+| `ling` (default) | `openai-chat:ling-3.0-tiny` | `localhost:8081/v1` | 32768 |
 | `deepseek` | `deepseek:deepseek-chat` | `api.deepseek.com` | 8192 |
 | `qwen` | `qwen:qwen3-59b` | `localhost:8082/v1` | 32768 |
 
@@ -60,7 +60,7 @@ All prefixed with `CODE_FACTORY_`:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PROVIDER` | `local` | Provider preset name |
+| `PROVIDER` | `ling` | Provider preset name |
 | `DEEPSEEK_API_KEY` | — | Required for `deepseek` provider |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | DeepSeek API endpoint |
 | `QWEN_BASE_URL` | `http://localhost:8082/v1` | Qwen endpoint |

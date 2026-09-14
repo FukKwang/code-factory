@@ -1,7 +1,7 @@
 from pydantic_ai import Agent
 from pydantic_ai.settings import ModelSettings
 
-from ..config import get_settings, resolve_model
+from ..config import Settings, get_settings, resolve_model
 
 MONTY_LIMITATIONS = """\
 Write Python for Monty sandbox.
@@ -25,8 +25,9 @@ NOT ALLOWED: inheritance, yield, del, eval/exec, third-party imports, redefining
 Return ONLY Python code. No markdown, no explanations, no comments."""
 
 
-def build_coder() -> Agent:
-    settings = get_settings()
+def build_coder(settings: Settings | None = None) -> Agent:
+    if settings is None:
+        settings = get_settings()
     return Agent(
         resolve_model(settings.model_coder, settings),
         output_type=str,

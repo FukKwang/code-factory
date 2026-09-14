@@ -1,11 +1,12 @@
 from pydantic_ai import Agent
 from pydantic_ai.settings import ModelSettings
 
-from ..config import get_settings, resolve_model
+from ..config import Settings, get_settings, resolve_model
 
 
-def build_reviewer() -> Agent:
-    settings = get_settings()
+def build_reviewer(settings: Settings | None = None) -> Agent:
+    if settings is None:
+        settings = get_settings()
     return Agent(
         resolve_model(settings.model_reviewer, settings),
         output_type=str,

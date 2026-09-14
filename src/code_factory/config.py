@@ -6,7 +6,7 @@ from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 PROVIDER_PRESETS: dict[str, dict] = {
-    "local": {
+    "ling": {
         "model": "openai-chat:ling-3.0-tiny",
         "max_tokens": 32768,
     },
@@ -24,7 +24,7 @@ PROVIDER_PRESETS: dict[str, dict] = {
 class Settings(BaseSettings):
     vault_path: Path = Path("/home/kwang/Documents/dev/code-factory-repo")
 
-    provider: str = "local"
+    provider: str = "ling"
 
     model_orchestrator: str = ""
     model_researcher: str = ""
@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _apply_preset(self):
         preset = PROVIDER_PRESETS.get(self.provider, {})
-        default_model = preset.get("model", "openai-chat:ling-3.0-tiny")
+        default_model = preset.get("model", PROVIDER_PRESETS["ling"]["model"])
         default_max = preset.get("max_tokens", 32768)
 
         if not self.model_orchestrator:

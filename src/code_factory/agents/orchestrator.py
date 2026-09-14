@@ -190,10 +190,10 @@ Rules:
         name="orchestrator",
     )
 
-    researcher = build_researcher()
-    test_writer = build_test_writer()
-    coder = build_coder()
-    reviewer = build_reviewer()
+    researcher = build_researcher(settings)
+    test_writer = build_test_writer(settings)
+    coder = build_coder(settings)
+    reviewer = build_reviewer(settings)
 
     @agent.tool
     async def search_vault(ctx: RunContext[FactoryDeps], query: str) -> str:

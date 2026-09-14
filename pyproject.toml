@@ -8,6 +8,10 @@ dependencies = [
     "pydantic-settings",
     "pyyaml",
     "faker",
+    "pandas",
+    "networkx",
+    "scipy",
+    "numpy",
 ]
 
 [project.scripts]
