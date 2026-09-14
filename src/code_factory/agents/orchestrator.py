@@ -580,27 +580,39 @@ CRITICAL: Use exact markers ===RESEARCH===, ===TESTS===, ===CODE===, ===REVIEW==
         fn_doc = _fn_docs(ticket.host_function_allowlist)
         schema_doc = "\n".join(f"  - {k}: {v}" for k, v in ticket.input_schema.items())
 
-        # Update tests
-        new_test_code = await _llm_call("test_writer",
-            f"Original spec:\n{spec[:300]}\nFeedback:\n{feedback}\n"
-            f"Current tests:\n{test_code}\n"
-            f"Host functions:\n{fn_doc}\n"
-            + (f"Input parameters:\n{schema_doc}\n" if schema_doc else "")
-            + "Update tests to cover feedback. Keep original assertions. Add new ones. Return only code."
-        )
-        new_test_code = _strip_fences(new_test_code)
+        if _pipeline_agent:
+            iterate_prompt = (
+                f"Modify existing code based on feedback.\n\nOriginal spec:\n{spec[:300]}\n"
+                f"Feedback:\n{feedback}\n\nCurrent code:\n{current_code}\n"
+                f"Current tests:\n{test_code}\n\nHost functions:\n{fn_doc}\n"
+                + (f"Input parameters in `inputs` dict:\n{schema_doc}\n" if schema_doc else "")
+                + "\nUpdate TESTS to cover feedback (keep original assertions, add new ones)."
+                + "\nUpdate CODE to satisfy feedback and pass all tests."
+                + "\nGenerate all sections: RESEARCH, TESTS, CODE, REVIEW."
+            )
+            sections = await _run_pipeline(iterate_prompt, "", "")
+            new_test_code = _strip_fences(sections.get("tests", test_code))
+            code = _strip_fences(sections.get("code", current_code))
+        else:
+            new_test_code = await _llm_call("test_writer",
+                f"Original spec:\n{spec[:300]}\nFeedback:\n{feedback}\n"
+                f"Current tests:\n{test_code}\n"
+                f"Host functions:\n{fn_doc}\n"
+                + (f"Input parameters:\n{schema_doc}\n" if schema_doc else "")
+                + "Update tests to cover feedback. Keep original assertions. Add new ones. Return only code."
+            )
+            new_test_code = _strip_fences(new_test_code)
+            code = await _llm_call("coder",
+                f"Modify code. Keep requirements.\nSpec:\n{spec[:300]}\nCode:\n{current_code}\n"
+                f"Feedback:\n{feedback}\nTests to pass:\n{new_test_code}\n"
+                f"Host functions:\n{fn_doc}\n"
+                + (f"Input parameters in `inputs` dict:\n{schema_doc}\n" if schema_doc else "")
+                + "Return only Python code."
+            )
+            code = _strip_fences(code)
+
         new_test_code, _ = _verify_tests(new_test_code)
         vault.write_stage_file(ticket_id, "test_solution.py", new_test_code)
-
-        # Update code
-        code = await _llm_call("coder",
-            f"Modify code. Keep requirements.\nSpec:\n{spec[:300]}\nCode:\n{current_code}\n"
-            f"Feedback:\n{feedback}\nTests to pass:\n{new_test_code}\n"
-            f"Host functions:\n{fn_doc}\n"
-            + (f"Input parameters in `inputs` dict:\n{schema_doc}\n" if schema_doc else "")
-            + "Return only Python code."
-        )
-        code = _strip_fences(code)
         code, _ = _verify_code(code, ticket.host_function_allowlist, spec + "\n" + feedback, ticket.input_schema)
 
         vault.write_stage_file(ticket_id, "solution.py", code)
