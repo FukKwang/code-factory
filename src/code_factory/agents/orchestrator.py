@@ -217,6 +217,7 @@ Rules:
                     runtime_inputs = _extract_inputs_from_query(query, ticket.input_schema)
                     ticket.status = TicketStatus.REUSED
                     vault.save_ticket(ticket)
+                    vault.commit(best.id, "reused")
                     run_result = _run_and_record(
                         vault, best.id, code, ticket.host_function_allowlist, runtime_inputs
                     )
@@ -239,6 +240,7 @@ Rules:
         if input_schema:
             ticket.input_schema = input_schema
             ctx.deps.vault.save_ticket(ticket)
+            ctx.deps.vault.commit(ticket.id, "set input_schema")
         ctx.deps.current_ticket_id = ticket.id
         return f"{ticket.id} created. Call generate_and_test with spec and runtime_inputs."
 
@@ -280,6 +282,7 @@ Rules:
         # Step 2: Generate tests
         ticket.status = TicketStatus.SPEC_DRAFTED
         vault.save_ticket(ticket)
+        vault.commit(ticket_id, "spec drafted")
 
         test_prompt = (
             f"Spec:\n{spec}\n\nResearch findings:\n{findings[:500]}\n\n"

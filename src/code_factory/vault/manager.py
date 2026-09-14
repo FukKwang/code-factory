@@ -86,7 +86,12 @@ class VaultManager:
 
     def commit(self, ticket_id: str, message: str):
         self._git("add", "-A")
-        self._git("commit", "-m", f"[{ticket_id}] {message}", "--allow-empty")
+        result = subprocess.run(
+            ["git", "diff", "--cached", "--quiet"],
+            cwd=self.root, capture_output=True,
+        )
+        if result.returncode != 0:
+            self._git("commit", "-m", f"[{ticket_id}] {message}")
 
     def _update_registry(self):
         entries = []
