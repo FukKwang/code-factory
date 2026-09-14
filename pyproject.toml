@@ -1,0 +1,18 @@
+[project]
+name = "code-factory"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic-ai[openai]",
+    "pydantic-monty",
+    "pydantic-settings",
+    "pyyaml",
+    "faker",
+]
+
+[project.scripts]
+code-factory = "code_factory.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
