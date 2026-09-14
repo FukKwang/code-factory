@@ -49,6 +49,11 @@ async def _run_loop(settings, deps, agent, compact_messages, maybe_compact):
             continue
         if user_input.lower() in ("exit", "quit", "q"):
             break
+        if user_input.lower() in ("clear", "/clear", "reset", "/reset"):
+            history = []
+            deps._tool_counts = None
+            print("Session cleared.\n")
+            continue
 
         deps._tool_counts = None
 

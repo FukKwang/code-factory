@@ -162,13 +162,34 @@ Generated code accesses data only through declared host functions. No raw databa
 
 Currently available (Faker-based for development):
 
-| Function | Signature | Returns |
-|----------|-----------|---------|
-| `query_borrower` | `({'name': str})` | Borrower profile (id, address, credit score, income, etc.) |
-| `query_loans` | `({'borrower_id': str})` | List of loan records (amount, tenor, interest, status, DPD) |
-| `query_borrowers_by_city` | `({'city': str, 'limit': int})` | List of borrower summaries in a city |
+**Domain functions** — interconnected via `borrower_id` / `loan_id`:
 
-Host functions validate arguments via Pydantic models at the trust boundary. Each ticket declares which host functions its code may call (`host_function_allowlist`).
+| Function | Args | Returns |
+|----------|------|---------|
+| `query_borrower` | `name: str` | Borrower profile (id, address, city, credit score, income) |
+| `query_loans` | `borrower_id: str` | List of loans (amount, tenor, interest rate, status, DPD) |
+| `query_borrowers_by_city` | `city: str, limit: int` | List of borrower summaries in a city |
+| `query_payments` | `loan_id: str` | Payment history for a loan |
+| `query_collateral` | `loan_id: str` | Collateral records for a loan |
+| `query_guarantors` | `borrower_id: str` | Guarantors linked to a borrower |
+| `query_collection_records` | `loan_id: str` | Collection activity records for a loan |
+| `query_transactions` | `borrower_id: str, limit: int` | Recent transactions for a borrower |
+| `query_portfolio_summary` | `city: str (optional)` | Portfolio-level summary (total loans, outstanding, avg DPD) |
+| `query_delinquency_stats` | `bucket: str (optional)` | Delinquency distribution by DPD bucket |
+
+**Library bridge functions** — wraps pandas/numpy/scipy/networkx for sandbox code:
+
+| Function | Args | Returns |
+|----------|------|---------|
+| `tabulate_data` | `records, columns, sort_by, ascending` | Filtered/sorted tabular data (pandas) |
+| `aggregate_data` | `records, group_by, aggregations` | Group-by aggregation results (pandas) |
+| `pivot_data` | `records, index, columns, values, aggfunc` | Pivot table (pandas) |
+| `compute_statistics` | `values: list[float]` | Descriptive stats: mean, median, std, min, max, quartiles (numpy) |
+| `compute_correlation` | `x_values, y_values` | Pearson and Spearman correlation with p-values (scipy) |
+| `analyze_network` | `edges, analysis, source, target` | Graph analysis: components, centrality, shortest path (networkx) |
+| `find_related_entities` | `edges, entity_id, depth` | BFS traversal to find connected entities (networkx) |
+
+All functions validate arguments via Pydantic models at the trust boundary. Deterministic seeding ensures same input always returns same fake data. Each ticket declares which host functions its code may call (`host_function_allowlist`).
 
 To add real data sources, replace Faker implementations in `src/code_factory/sandbox/host_functions.py` with actual DB/API/CSV connectors.
 
@@ -241,6 +262,63 @@ src/code_factory/
 2. Add to `HOST_FUNCTIONS` dict
 3. Add description to `HOST_FUNCTION_DESCRIPTIONS`
 4. Function is now available to all generated code
+
+## Test Prompts
+
+Prompts to verify pipeline end-to-end, ordered by complexity:
+
+### Simple lookup
+```
+Tell me about borrower Budi Santoso
+```
+Expects: `query_borrower` call, returns profile.
+
+### One-hop join
+```
+Show me all loans for borrower Rina Wijaya
+```
+Expects: `query_borrower` → `query_loans` chain.
+
+### Two-hop join
+```
+Show payment history for all loans belonging to borrower Andi Pratama
+```
+Expects: borrower → loans → `query_payments` per loan.
+
+### Multi-entity join
+```
+For borrower Siti Rahayu, show all guarantors and collateral across their loans
+```
+Expects: borrower → loans → `query_guarantors` + `query_collateral` per loan.
+
+### Aggregation (library bridge)
+```
+What is the average loan amount and total outstanding balance for borrowers in Jakarta?
+```
+Expects: `query_borrowers_by_city` → loans per borrower → `aggregate_data` or `compute_statistics`.
+
+### Portfolio analytics
+```
+Give me a delinquency breakdown by bucket across the whole portfolio
+```
+Expects: `query_delinquency_stats`, possibly `tabulate_data` for formatting.
+
+### Correlation (scipy bridge)
+```
+Is there a correlation between credit score and total loan amount across all borrowers in Bandung?
+```
+Expects: borrowers by city → loans per borrower → `compute_correlation`.
+
+### Network analysis (networkx bridge)
+```
+Build a relationship graph between borrowers and their guarantors in Surabaya, find who is connected to the most borrowers
+```
+Expects: `query_borrowers_by_city` → guarantors per borrower → `analyze_network`.
+
+### Ticket reuse
+Run any prompt above twice. Second run should find existing ticket in vault and reuse code with new/same inputs.
+
+Run with: `task ling`, `task qwen`, or `task ling:qwen`.
 
 ## License
 

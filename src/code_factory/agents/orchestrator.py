@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import sys
 from dataclasses import dataclass
 
 from pydantic_ai import Agent, RunContext
@@ -17,7 +18,18 @@ from .researcher import build_researcher
 from .reviewer import build_reviewer
 from .test_writer import build_test_writer
 
-MAX_TOOL_CALLS = 3
+MAX_TOOL_CALLS = 2
+
+_DIM = "\033[2m"
+_RESET = "\033[0m"
+_CYAN = "\033[36m"
+_GREEN = "\033[32m"
+_RED = "\033[31m"
+_YELLOW = "\033[33m"
+
+
+def _status(icon: str, msg: str):
+    print(f"{_DIM}{icon} {msg}{_RESET}", file=sys.stderr, flush=True)
 
 
 @dataclass
@@ -27,12 +39,12 @@ class FactoryDeps:
     current_ticket_id: str | None = None
     _tool_counts: dict[str, int] | None = None
 
-    def check_limit(self, tool_name: str) -> str | None:
+    def check_limit(self, tool_name: str, limit: int = MAX_TOOL_CALLS) -> str | None:
         if self._tool_counts is None:
             self._tool_counts = {}
         self._tool_counts[tool_name] = self._tool_counts.get(tool_name, 0) + 1
-        if self._tool_counts[tool_name] > MAX_TOOL_CALLS:
-            return f"STOP. {tool_name} limit reached ({MAX_TOOL_CALLS}). DO NOT call {tool_name} again. Use create_ticket instead."
+        if self._tool_counts[tool_name] > limit:
+            return f"STOP. {tool_name} limit reached ({limit}). Do NOT call it again."
         return None
 
 
@@ -144,8 +156,9 @@ def _verify_tests(test_code: str) -> tuple[str, list[str]]:
 
 
 def _run_and_record(vault: VaultManager, ticket_id: str, code: str,
-                    allowlist: list[str], inputs: dict | None = None) -> RunResult:
-    run_result = run_solution(code, inputs or {}, allowlist)
+                    allowlist: list[str], inputs: dict | None = None,
+                    limits: dict[str, float | int] | None = None) -> RunResult:
+    run_result = run_solution(code, inputs or {}, allowlist, limits=limits)
     record = RunRecord(
         inputs=inputs or {},
         output=run_result.value if run_result.success else None,
@@ -174,9 +187,11 @@ def build_orchestrator(settings: Settings | None = None) -> Agent:
 Pipeline:
 1. search_vault(query) — find existing reusable program
 2. If found: auto-runs with extracted inputs, returns result
-3. If not found: create_ticket with GENERALIZED title and input_schema
+3. If not found: IMMEDIATELY create_ticket. Do NOT call search_vault again with rephrased query.
 4. generate_and_test(ticket_id, spec, runtime_inputs) — full TDD pipeline
 5. Present result in plain language. Never show code.
+
+IMPORTANT: Call search_vault AT MOST ONCE per user request. If it returns nothing, create a new ticket immediately.
 
 IMPORTANT — Generalization:
 - Ticket title = reusable program name, NOT specific query. Example: "Find loans by borrower name", NOT "Find loans for borrower ABC"
@@ -198,13 +213,14 @@ Rules:
     @agent.tool
     async def search_vault(ctx: RunContext[FactoryDeps], query: str) -> str:
         """Search for existing reusable program. Auto-runs if found, extracting inputs from query."""
+        _status("🔍", f"searching vault: {query}")
         limit_msg = ctx.deps.check_limit("search_vault")
         if limit_msg:
             return limit_msg
         vault = ctx.deps.vault
         results = vault.search(query)
         if not results:
-            return "None found. Use create_ticket with generalized title and input_schema."
+            return "NONE FOUND. Do NOT search again. Use create_ticket NOW with generalized title and input_schema."
         reusable = [r for r in results if r.status in (
             TicketStatus.APPROVED, TicketStatus.CLOSED, TicketStatus.REUSED, TicketStatus.ITERATING,
         )]
@@ -218,8 +234,9 @@ Rules:
                     ticket.status = TicketStatus.REUSED
                     vault.save_ticket(ticket)
                     vault.commit(best.id, "reused")
+                    limits = ctx.deps.settings.sandbox.clamp()
                     run_result = _run_and_record(
-                        vault, best.id, code, ticket.host_function_allowlist, runtime_inputs
+                        vault, best.id, code, ticket.host_function_allowlist, runtime_inputs, limits=limits
                     )
                     if run_result.success:
                         return (
@@ -228,13 +245,14 @@ Rules:
                             f"Result:\n{str(run_result.value)[:800]}"
                         )
                     return f"Reuse {best.id} failed: {run_result.error}. Use iterate_code({best.id!r}, ...) to fix."
-        return "None found. Use create_ticket with generalized title and input_schema."
+        return "NONE FOUND. Do NOT search again. Use create_ticket NOW with generalized title and input_schema."
 
     @agent.tool
     async def create_ticket(ctx: RunContext[FactoryDeps], title: str, requirements: str,
                             host_functions: list[str],
                             input_schema: dict[str, str] | None = None) -> str:
         """Create ticket for reusable program. Title must be GENERALIZED (e.g. 'Find loans by borrower name'). input_schema maps parameter names to descriptions."""
+        _status("📝", f"creating ticket: {title}")
         valid = [f for f in host_functions if f in HOST_FUNCTION_DESCRIPTIONS] or fn_names
         ticket = ctx.deps.vault.create_ticket(title, requirements, host_functions=valid)
         if input_schema:
@@ -246,9 +264,14 @@ Rules:
 
     @agent.tool
     async def generate_and_test(ctx: RunContext[FactoryDeps], ticket_id: str, spec: str,
-                                runtime_inputs: dict[str, str] | None = None) -> str:
-        """Full TDD pipeline: research, tests, code, validate. runtime_inputs = specific values for this run."""
+                                runtime_inputs: dict[str, str] | None = None,
+                                sandbox_limits: dict[str, float | int | None] | None = None) -> str:
+        """Full TDD pipeline: research, tests, code, validate. runtime_inputs = specific values for this run.
+        sandbox_limits = optional resource overrides: max_duration_secs (5-30), max_memory (16M-128M), max_recursion_depth (up to 500)."""
+        _status("⚙️", f"generate_and_test: {ticket_id}")
         vault = ctx.deps.vault
+        limits = ctx.deps.settings.sandbox.clamp(sandbox_limits)
+        _status("📏", f"sandbox limits: {limits['max_duration_secs']}s, {limits['max_memory'] // 1_000_000}MB, depth={limits['max_recursion_depth']}")
         ticket = vault.load_ticket(ticket_id)
         if not ticket:
             return f"{ticket_id} not found."
@@ -258,7 +281,7 @@ Rules:
             code = vault.read_stage_file(ticket_id, "solution.py")
             if code:
                 run_inputs = runtime_inputs or _extract_inputs_from_query(spec, ticket.input_schema)
-                run_result = _run_and_record(vault, ticket_id, code, ticket.host_function_allowlist, run_inputs)
+                run_result = _run_and_record(vault, ticket_id, code, ticket.host_function_allowlist, run_inputs, limits=limits)
                 if run_result.success:
                     return f"Already solved. Re-ran with {run_inputs}. Result:\n{str(run_result.value)[:800]}"
 
@@ -267,6 +290,7 @@ Rules:
         schema_doc = "\n".join(f"  - {k}: {v}" for k, v in ticket.input_schema.items())
 
         # Step 1: Research
+        _status("🔬", "researcher analyzing requirements...")
         ticket.status = TicketStatus.GATHERING
         vault.save_ticket(ticket)
 
@@ -280,6 +304,7 @@ Rules:
         vault.commit(ticket_id, "research")
 
         # Step 2: Generate tests
+        _status("✏️", "generating tests...")
         ticket.status = TicketStatus.SPEC_DRAFTED
         vault.save_ticket(ticket)
         vault.commit(ticket_id, "spec drafted")
@@ -305,6 +330,7 @@ Rules:
         vault.commit(ticket_id, "generate tests")
 
         # Step 3: Generate code (TDD) — must use inputs dict
+        _status("💻", "coder writing solution...")
         code_prompt = (
             f"Spec:\n{spec}\n\nTests your code must pass:\n{test_code}\n\n"
             f"Host functions:\n{fn_doc}\n\n"
@@ -326,14 +352,21 @@ Rules:
         vault.commit(ticket_id, "generate code")
 
         # Step 4: Run tests (with sample inputs)
+        _status("🧪", "running tests...")
         test_inputs = runtime_inputs or {k: "test" for k in ticket.input_schema}
-        test_result = run_tests(code, test_code, ticket.host_function_allowlist, test_inputs)
+        test_result = run_tests(code, test_code, ticket.host_function_allowlist, test_inputs, limits=limits)
+        if test_result.passed:
+            _status("✅", "tests passed")
+        else:
+            _status("❌", f"tests failed: {'; '.join(test_result.failures[:2])}")
         vault.commit(ticket_id, f"tests {'pass' if test_result.passed else 'fail'}")
 
         # Step 5: Run solution with real inputs
-        run_result = _run_and_record(vault, ticket_id, code, ticket.host_function_allowlist, test_inputs)
+        _status("▶️", "executing solution...")
+        run_result = _run_and_record(vault, ticket_id, code, ticket.host_function_allowlist, test_inputs, limits=limits)
 
         # Step 6: Review
+        _status("📋", "reviewer evaluating output...")
         all_warnings = test_warnings + code_warnings
         review_input = (
             f"Requirement: {spec[:300]}\n"
@@ -357,6 +390,7 @@ Rules:
     @agent.tool
     async def close_ticket(ctx: RunContext[FactoryDeps], ticket_id: str) -> str:
         """Close ticket after user satisfied. Call directly, no search_vault needed."""
+        _status("🔒", f"closing {ticket_id}")
         vault = ctx.deps.vault
         ticket = vault.load_ticket(ticket_id)
         if not ticket:
@@ -368,8 +402,14 @@ Rules:
 
     @agent.tool
     async def iterate_code(ctx: RunContext[FactoryDeps], ticket_id: str, feedback: str,
-                           runtime_inputs: dict[str, str] | None = None) -> str:
-        """Modify existing program based on feedback. Call directly with ticket_id."""
+                           runtime_inputs: dict[str, str] | None = None,
+                           sandbox_limits: dict[str, float | int | None] | None = None) -> str:
+        """Modify existing program based on feedback. Call directly with ticket_id.
+        sandbox_limits = optional resource overrides: max_duration_secs (5-30), max_memory (16M-128M), max_recursion_depth (up to 500)."""
+        _status("🔄", f"iterating {ticket_id}: {feedback[:60]}")
+        limit_msg = ctx.deps.check_limit("iterate_code", 2)
+        if limit_msg:
+            return limit_msg + " Present what you have to the user."
         vault = ctx.deps.vault
         ticket = vault.load_ticket(ticket_id)
         if not ticket:
@@ -410,9 +450,10 @@ Rules:
         vault.commit(ticket_id, f"iterate: {feedback[:40]}")
 
         # Run tests + solution
+        limits = ctx.deps.settings.sandbox.clamp(sandbox_limits)
         test_inputs = runtime_inputs or {k: "test" for k in ticket.input_schema}
-        test_result = run_tests(code, new_test_code, ticket.host_function_allowlist, test_inputs)
-        run_result = _run_and_record(vault, ticket_id, code, ticket.host_function_allowlist, test_inputs)
+        test_result = run_tests(code, new_test_code, ticket.host_function_allowlist, test_inputs, limits=limits)
+        run_result = _run_and_record(vault, ticket_id, code, ticket.host_function_allowlist, test_inputs, limits=limits)
 
         if run_result.success and test_result.passed:
             ticket.status = TicketStatus.APPROVED

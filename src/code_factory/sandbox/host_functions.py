@@ -48,6 +48,10 @@ class QueryCollateralArgs(BaseModel):
     loan_id: str
 
 
+class QueryLoanDetailsArgs(BaseModel):
+    loan_id: str
+
+
 class QueryGuarantorsArgs(BaseModel):
     borrower_id: str
 
@@ -185,6 +189,33 @@ def query_borrowers_by_city(args_dict: dict[str, Any]) -> list[dict[str, Any]]:
         }
         for _ in range(args.limit)
     ]
+
+
+def query_loan_details(args_dict: dict[str, Any]) -> dict[str, Any]:
+    args = QueryLoanDetailsArgs.model_validate(args_dict)
+    loan = _registry.get(f"loan_by_id:{args.loan_id}")
+    if not loan:
+        _seeded(f"loan_detail:{args.loan_id}")
+        loan = {
+            "loan_id": args.loan_id,
+            "borrower_id": fake.uuid4(),
+            "product": fake.random_element(["bolt", "flash", "steady"]),
+            "amount": fake.random_int(1_000_000, 100_000_000),
+            "tenor_months": fake.random_element([3, 6, 12, 24, 36]),
+            "interest_rate": round(fake.pyfloat(min_value=5.0, max_value=25.0), 2),
+            "status": fake.random_element(["active", "paid_off", "defaulted", "restructured"]),
+            "dpd": fake.random_int(0, 180),
+            "disbursed_date": fake.date_between("-2y", "today").isoformat(),
+        }
+    payments = query_payments({"loan_id": args.loan_id})
+    collateral = query_collateral({"loan_id": args.loan_id})
+    collections = query_collection_records({"loan_id": args.loan_id})
+    return {
+        "loan": loan,
+        "payments": payments,
+        "collateral": collateral,
+        "collection_records": collections,
+    }
 
 
 def query_payments(args_dict: dict[str, Any]) -> list[dict[str, Any]]:
@@ -492,6 +523,7 @@ HOST_FUNCTIONS: dict[str, Callable] = {
     "query_borrower": query_borrower,
     "query_loans": query_loans,
     "query_borrowers_by_city": query_borrowers_by_city,
+    "query_loan_details": query_loan_details,
     "query_payments": query_payments,
     "query_collateral": query_collateral,
     "query_guarantors": query_guarantors,
@@ -517,6 +549,7 @@ HOST_FUNCTION_DESCRIPTIONS: dict[str, str] = {
     "query_borrower": "query_borrower({'name': str}) -> dict: borrower_id, name, address, city, phone, email, credit_score, monthly_income, employment_status",
     "query_loans": "query_loans({'borrower_id': str}) -> list of loans: loan_id, borrower_id, product, amount, tenor_months, interest_rate, status, dpd, disbursed_date",
     "query_borrowers_by_city": "query_borrowers_by_city({'city': str, 'limit': int=10}) -> list: borrower_id, name, city, credit_score, monthly_income, total_loans, total_outstanding",
+    "query_loan_details": "query_loan_details({'loan_id': str}) -> dict: loan info + payments + collateral + collection_records for a single loan",
     "query_payments": "query_payments({'loan_id': str}) -> list: payment_id, loan_id, amount, payment_date, method, status, late_fee",
     "query_collateral": "query_collateral({'loan_id': str}) -> list: collateral_id, loan_id, type, description, appraised_value, appraisal_date, status",
     "query_guarantors": "query_guarantors({'borrower_id': str}) -> list: guarantor_id, borrower_id, name, relationship, phone, monthly_income, guarantee_amount",

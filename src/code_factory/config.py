@@ -21,10 +21,37 @@ PROVIDER_PRESETS: dict[str, dict] = {
 }
 
 
+class SandboxLimits(BaseSettings):
+    """Min/max bounds for Monty sandbox resource limits."""
+    min_duration_secs: float = 5.0
+    max_duration_secs: float = 30.0
+    default_duration_secs: float = 10.0
+
+    min_memory: int = 16_000_000       # 16 MB
+    max_memory: int = 128_000_000      # 128 MB
+    default_memory: int = 64_000_000   # 64 MB
+
+    max_recursion_depth: int = 500
+
+    model_config = SettingsConfigDict(env_prefix="CODE_FACTORY_SANDBOX_")
+
+    def clamp(self, requested: dict[str, float | int | None] | None = None) -> dict[str, float | int]:
+        r = requested or {}
+        dur = r.get("max_duration_secs") or self.default_duration_secs
+        mem = r.get("max_memory") or self.default_memory
+        return {
+            "max_duration_secs": max(self.min_duration_secs, min(dur, self.max_duration_secs)),
+            "max_memory": max(self.min_memory, min(int(mem), self.max_memory)),
+            "max_recursion_depth": min(int(r.get("max_recursion_depth") or self.max_recursion_depth), self.max_recursion_depth),
+        }
+
+
 class Settings(BaseSettings):
     vault_path: Path = Path("/home/kwang/Documents/dev/code-factory-repo")
 
     provider: str = "ling"
+
+    sandbox: SandboxLimits = SandboxLimits()
 
     model_orchestrator: str = ""
     model_researcher: str = ""

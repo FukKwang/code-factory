@@ -20,17 +20,19 @@ class TestResult:
 
 
 def run_solution(code: str, inputs: dict[str, Any] | None = None,
-                 host_function_allowlist: list[str] | None = None) -> RunResult:
+                 host_function_allowlist: list[str] | None = None,
+                 limits: dict[str, float | int] | None = None) -> RunResult:
     try:
-        from pydantic_monty import Monty
+        from pydantic_monty import Monty, ResourceLimits
     except ImportError:
         return _run_fallback(code, inputs, host_function_allowlist)
 
     external_lookup = build_external_lookup(host_function_allowlist)
     wrapped = {"inputs": inputs or {}}
+    resource_limits = ResourceLimits(**limits) if limits else None
     try:
         with Monty() as pool:
-            with pool.checkout() as session:
+            with pool.checkout(limits=resource_limits) as session:
                 session.feed_run(
                     code,
                     inputs=wrapped,
@@ -44,18 +46,20 @@ def run_solution(code: str, inputs: dict[str, Any] | None = None,
 
 def run_tests(solution_code: str, test_code: str,
               host_function_allowlist: list[str] | None = None,
-              inputs: dict[str, Any] | None = None) -> TestResult:
+              inputs: dict[str, Any] | None = None,
+              limits: dict[str, float | int] | None = None) -> TestResult:
     try:
-        from pydantic_monty import Monty
+        from pydantic_monty import Monty, ResourceLimits
     except ImportError:
         return _run_tests_fallback(solution_code, test_code, host_function_allowlist, inputs)
 
     external_lookup = build_external_lookup(host_function_allowlist)
     wrapped = {"inputs": inputs or {}}
     combined = f"{solution_code}\n\n{test_code}"
+    resource_limits = ResourceLimits(**limits) if limits else None
     try:
         with Monty() as pool:
-            with pool.checkout() as session:
+            with pool.checkout(limits=resource_limits) as session:
                 session.feed_run(combined, inputs=wrapped, external_lookup=external_lookup)
                 return TestResult(passed=True, total=test_code.count("assert "))
     except Exception as e:
