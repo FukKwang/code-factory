@@ -118,6 +118,24 @@ class FindRelatedEntitiesArgs(BaseModel):
     depth: int = 2
 
 
+# Human input arg models
+
+class AskUserArgs(BaseModel):
+    prompt: str
+
+class AskNumberArgs(BaseModel):
+    prompt: str
+    min: float | None = None
+    max: float | None = None
+
+class AskConfirmArgs(BaseModel):
+    prompt: str
+
+class AskChoiceArgs(BaseModel):
+    prompt: str
+    options: list[str]
+
+
 # ---------------------------------------------------------------------------
 # Domain functions — interconnected via borrower_id / loan_id
 # ---------------------------------------------------------------------------
@@ -542,7 +560,14 @@ HOST_FUNCTIONS: dict[str, Callable] = {
     # Library bridges (networkx)
     "analyze_network": analyze_network,
     "find_related_entities": find_related_entities,
+    # Human input — placeholders, resolved via snapshot loop or mocked in tests
+    "ask_user": lambda d: d.get("prompt", ""),
+    "ask_number": lambda d: d.get("min", 0) or 0,
+    "ask_confirm": lambda d: True,
+    "ask_choice": lambda d: (d.get("options") or [""])[0],
 }
+
+HUMAN_INPUT_FUNCTIONS: set[str] = {"ask_user", "ask_number", "ask_confirm", "ask_choice"}
 
 HOST_FUNCTION_DESCRIPTIONS: dict[str, str] = {
     # Core domain
@@ -566,6 +591,11 @@ HOST_FUNCTION_DESCRIPTIONS: dict[str, str] = {
     "compute_correlation": "compute_correlation({'x_values': list[float], 'y_values': list[float]}) -> dict: pearson, spearman, p_value, n",
     "analyze_network": "analyze_network({'edges': list[[str,str]], 'analysis': 'components|centrality|shortest_path|degree', 'source': str|None, 'target': str|None}) -> graph analysis via networkx",
     "find_related_entities": "find_related_entities({'edges': list[[str,str]], 'entity_id': str, 'depth': int=2}) -> BFS related entities by distance via networkx",
+    # Human input (snapshot-based, pauses sandbox for user input)
+    "ask_user": "ask_user({'prompt': str}) -> str: pause and ask user for text input",
+    "ask_number": "ask_number({'prompt': str, 'min': float|None, 'max': float|None}) -> float: pause and ask user for number",
+    "ask_confirm": "ask_confirm({'prompt': str}) -> bool: pause and ask user yes/no",
+    "ask_choice": "ask_choice({'prompt': str, 'options': list[str]}) -> str: pause and ask user to pick from options",
 }
 
 

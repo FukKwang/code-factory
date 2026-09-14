@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from .models import RunRecord, Ticket, TicketStatus, TicketSummary
+from .models import RunRecord, StructuralMatch, Ticket, TicketStatus, TicketSummary
 
 
 class VaultManager:
@@ -104,6 +104,8 @@ class VaultManager:
                 entries.append(TicketSummary(
                     id=t.id, title=t.title, tags=t.tags,
                     summary=t.requirements[:120], status=t.status,
+                    host_functions=t.host_function_allowlist,
+                    input_keys=list(t.input_schema.keys()),
                 ).model_dump(mode="json"))
         self.registry_path.write_text(json.dumps(entries, indent=2))
 
@@ -125,3 +127,35 @@ class VaultManager:
                 scored.append((score, e))
         scored.sort(key=lambda x: x[0], reverse=True)
         return [e for _, e in scored[:top_n]]
+
+    def search_structural(self, host_functions: list[str], input_keys: list[str],
+                          top_n: int = 5) -> list[StructuralMatch]:
+        if not self.registry_path.exists():
+            return []
+        entries = [TicketSummary.model_validate(e) for e in json.loads(self.registry_path.read_text())]
+        query_fns = set(host_functions)
+        query_inputs = set(input_keys)
+        matches = []
+        for e in entries:
+            entry_fns = set(e.host_functions)
+            entry_inputs = set(e.input_keys)
+            fn_union = query_fns | entry_fns
+            fn_overlap = len(query_fns & entry_fns) / len(fn_union) if fn_union else 0.0
+            input_union = query_inputs | entry_inputs
+            input_overlap = len(query_inputs & entry_inputs) / len(input_union) if input_union else 0.0
+            if fn_overlap < 0.5:
+                continue
+            if fn_overlap == 1.0 and input_overlap == 1.0:
+                match_type = "exact"
+            elif query_fns >= entry_fns and query_inputs >= entry_inputs:
+                match_type = "superset"
+            elif entry_fns >= query_fns and entry_inputs >= query_inputs:
+                match_type = "subset"
+            else:
+                match_type = "partial"
+            matches.append(StructuralMatch(
+                ticket=e, fn_overlap=fn_overlap, input_overlap=input_overlap,
+                match_type=match_type,
+            ))
+        matches.sort(key=lambda m: (m.fn_overlap + m.input_overlap), reverse=True)
+        return matches[:top_n]

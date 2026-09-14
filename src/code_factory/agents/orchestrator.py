@@ -12,7 +12,7 @@ from ..context.manager import write_findings_file
 from ..sandbox.host_functions import HOST_FUNCTION_DESCRIPTIONS
 from ..sandbox.runner import RunResult, run_solution, run_tests
 from ..vault.manager import VaultManager
-from ..vault.models import RunRecord, TicketStatus
+from ..vault.models import RunRecord, StructuralMatch, TicketStatus
 from .coder import build_coder
 from .researcher import build_researcher
 from .reviewer import build_reviewer
@@ -157,8 +157,9 @@ def _verify_tests(test_code: str) -> tuple[str, list[str]]:
 
 def _run_and_record(vault: VaultManager, ticket_id: str, code: str,
                     allowlist: list[str], inputs: dict | None = None,
-                    limits: dict[str, float | int] | None = None) -> RunResult:
-    run_result = run_solution(code, inputs or {}, allowlist, limits=limits)
+                    limits: dict[str, float | int] | None = None,
+                    interactive: bool = False) -> RunResult:
+    run_result = run_solution(code, inputs or {}, allowlist, limits=limits, interactive=interactive)
     record = RunRecord(
         inputs=inputs or {},
         output=run_result.value if run_result.success else None,
@@ -185,19 +186,27 @@ def build_orchestrator(settings: Settings | None = None) -> Agent:
         instructions=f"""Coding agent that creates REUSABLE programs.
 
 Pipeline:
-1. search_vault(query) — find existing reusable program
+1. search_vault(query, host_functions=[...], input_keys=[...]) — ALWAYS pass host_functions and input_keys for structural matching
 2. If found: auto-runs with extracted inputs, returns result
-3. If not found: IMMEDIATELY create_ticket. Do NOT call search_vault again with rephrased query.
-4. generate_and_test(ticket_id, spec, runtime_inputs) — full TDD pipeline
-5. Present result in plain language. Never show code.
+3. If structural match returned: use iterate_code to extend existing ticket, do NOT create duplicate
+4. If not found: IMMEDIATELY create_ticket. Do NOT call search_vault again with rephrased query.
+5. generate_and_test(ticket_id, spec, runtime_inputs) — full TDD pipeline
+6. Present result in plain language. Never show code.
 
 IMPORTANT: Call search_vault AT MOST ONCE per user request. If it returns nothing, create a new ticket immediately.
+IMPORTANT: ALWAYS pass host_functions and input_keys to search_vault. This enables deterministic structural dedup.
 
 IMPORTANT — Generalization:
 - Ticket title = reusable program name, NOT specific query. Example: "Find loans by borrower name", NOT "Find loans for borrower ABC"
 - input_schema = parameters the program needs. Example: {{"borrower_name": "Name of borrower to look up"}}
 - runtime_inputs = specific values for THIS run. Example: {{"borrower_name": "ABC"}}
 - close_ticket(ticket_id) and iterate_code(ticket_id, feedback) can be called directly without search_vault first.
+
+Human input functions (ask_user, ask_number, ask_confirm, ask_choice):
+- Use these when the program needs runtime input from the user beyond initial parameters.
+- Sandbox pauses at each call, prompts user, resumes with their answer.
+- Include in host_functions allowlist when needed.
+- During tests, these return mock defaults automatically.
 
 Rules:
 - Never invent ticket_ids. Only use IDs from search_vault or create_ticket.
@@ -211,19 +220,55 @@ Rules:
     reviewer = build_reviewer(settings)
 
     @agent.tool
-    async def search_vault(ctx: RunContext[FactoryDeps], query: str) -> str:
-        """Search for existing reusable program. Auto-runs if found, extracting inputs from query."""
+    async def search_vault(ctx: RunContext[FactoryDeps], query: str,
+                           host_functions: list[str] | None = None,
+                           input_keys: list[str] | None = None) -> str:
+        """Search for existing reusable program. Pass host_functions and input_keys for structural matching. Auto-runs if found."""
         _status("🔍", f"searching vault: {query}")
         limit_msg = ctx.deps.check_limit("search_vault")
         if limit_msg:
             return limit_msg
         vault = ctx.deps.vault
+        reusable_statuses = (TicketStatus.APPROVED, TicketStatus.CLOSED, TicketStatus.REUSED, TicketStatus.ITERATING)
+
+        if host_functions and input_keys:
+            structural = vault.search_structural(host_functions, input_keys)
+            for m in structural:
+                if m.ticket.status not in reusable_statuses:
+                    continue
+                code = vault.read_stage_file(m.ticket.id, "solution.py")
+                if not code:
+                    continue
+                ticket = vault.load_ticket(m.ticket.id)
+                if not ticket:
+                    continue
+                if m.match_type == "exact":
+                    runtime_inputs = _extract_inputs_from_query(query, ticket.input_schema)
+                    ticket.status = TicketStatus.REUSED
+                    vault.save_ticket(ticket)
+                    vault.commit(m.ticket.id, "reused (structural exact)")
+                    limits = ctx.deps.settings.sandbox.clamp()
+                    run_result = _run_and_record(
+                        vault, m.ticket.id, code, ticket.host_function_allowlist, runtime_inputs,
+                        limits=limits, interactive=sys.stdin.isatty(),
+                    )
+                    if run_result.success:
+                        return (
+                            f"DONE. Reused {m.ticket.id} ({m.ticket.title}) [structural exact match]. "
+                            f"Inputs: {runtime_inputs}. Do NOT create_ticket.\n"
+                            f"Result:\n{str(run_result.value)[:800]}"
+                        )
+                    return f"Reuse {m.ticket.id} failed: {run_result.error}. Use iterate_code({m.ticket.id!r}, ...) to fix."
+                return (
+                    f"STRUCTURAL MATCH: {m.ticket.id} ({m.ticket.title}) — {m.match_type} "
+                    f"(fn_overlap={m.fn_overlap:.0%}, input_overlap={m.input_overlap:.0%}). "
+                    f"Consider iterate_code({m.ticket.id!r}, ...) to extend it instead of creating duplicate."
+                )
+
         results = vault.search(query)
         if not results:
             return "NONE FOUND. Do NOT search again. Use create_ticket NOW with generalized title and input_schema."
-        reusable = [r for r in results if r.status in (
-            TicketStatus.APPROVED, TicketStatus.CLOSED, TicketStatus.REUSED, TicketStatus.ITERATING,
-        )]
+        reusable = [r for r in results if r.status in reusable_statuses]
         if reusable:
             best = reusable[0]
             code = vault.read_stage_file(best.id, "solution.py")
@@ -236,7 +281,8 @@ Rules:
                     vault.commit(best.id, "reused")
                     limits = ctx.deps.settings.sandbox.clamp()
                     run_result = _run_and_record(
-                        vault, best.id, code, ticket.host_function_allowlist, runtime_inputs, limits=limits
+                        vault, best.id, code, ticket.host_function_allowlist, runtime_inputs,
+                        limits=limits, interactive=sys.stdin.isatty(),
                     )
                     if run_result.success:
                         return (
@@ -254,7 +300,17 @@ Rules:
         """Create ticket for reusable program. Title must be GENERALIZED (e.g. 'Find loans by borrower name'). input_schema maps parameter names to descriptions."""
         _status("📝", f"creating ticket: {title}")
         valid = [f for f in host_functions if f in HOST_FUNCTION_DESCRIPTIONS] or fn_names
-        ticket = ctx.deps.vault.create_ticket(title, requirements, host_functions=valid)
+        vault = ctx.deps.vault
+        dupes = vault.search_structural(valid, list((input_schema or {}).keys()))
+        exact = [d for d in dupes if d.match_type == "exact" and d.ticket.status in (
+            TicketStatus.APPROVED, TicketStatus.CLOSED, TicketStatus.REUSED,
+        )]
+        if exact:
+            return (
+                f"DUPLICATE BLOCKED. {exact[0].ticket.id} ({exact[0].ticket.title}) has identical "
+                f"host_functions and input_keys. Use search_vault or iterate_code({exact[0].ticket.id!r}, ...) instead."
+            )
+        ticket = vault.create_ticket(title, requirements, host_functions=valid)
         if input_schema:
             ticket.input_schema = input_schema
             ctx.deps.vault.save_ticket(ticket)
@@ -281,7 +337,7 @@ Rules:
             code = vault.read_stage_file(ticket_id, "solution.py")
             if code:
                 run_inputs = runtime_inputs or _extract_inputs_from_query(spec, ticket.input_schema)
-                run_result = _run_and_record(vault, ticket_id, code, ticket.host_function_allowlist, run_inputs, limits=limits)
+                run_result = _run_and_record(vault, ticket_id, code, ticket.host_function_allowlist, run_inputs, limits=limits, interactive=sys.stdin.isatty())
                 if run_result.success:
                     return f"Already solved. Re-ran with {run_inputs}. Result:\n{str(run_result.value)[:800]}"
 
@@ -363,7 +419,7 @@ Rules:
 
         # Step 5: Run solution with real inputs
         _status("▶️", "executing solution...")
-        run_result = _run_and_record(vault, ticket_id, code, ticket.host_function_allowlist, test_inputs, limits=limits)
+        run_result = _run_and_record(vault, ticket_id, code, ticket.host_function_allowlist, test_inputs, limits=limits, interactive=sys.stdin.isatty())
 
         # Step 6: Review
         _status("📋", "reviewer evaluating output...")
@@ -453,7 +509,7 @@ Rules:
         limits = ctx.deps.settings.sandbox.clamp(sandbox_limits)
         test_inputs = runtime_inputs or {k: "test" for k in ticket.input_schema}
         test_result = run_tests(code, new_test_code, ticket.host_function_allowlist, test_inputs, limits=limits)
-        run_result = _run_and_record(vault, ticket_id, code, ticket.host_function_allowlist, test_inputs, limits=limits)
+        run_result = _run_and_record(vault, ticket_id, code, ticket.host_function_allowlist, test_inputs, limits=limits, interactive=sys.stdin.isatty())
 
         if run_result.success and test_result.passed:
             ticket.status = TicketStatus.APPROVED

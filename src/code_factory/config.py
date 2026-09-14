@@ -15,7 +15,7 @@ PROVIDER_PRESETS: dict[str, dict] = {
         "max_tokens": 32768,
     },
     "deepseek": {
-        "model": "deepseek:deepseek-chat",
+        "model": "deepseek:deepseek-flash",
         "max_tokens": 8192,
     },
 }

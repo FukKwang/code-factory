@@ -61,6 +61,14 @@ async def _run_loop(settings, deps, agent, compact_messages, maybe_compact):
             history = maybe_compact(history, settings.max_tokens)
             result = await agent.run(user_input, deps=deps, message_history=history)
             print(result.output)
+            u = result.usage
+            details = u.details or {}
+            cache_hit = details.get("prompt_cache_hit_tokens", 0)
+            cache_miss = details.get("prompt_cache_miss_tokens", 0)
+            total_in = cache_hit + cache_miss
+            hit_pct = (cache_hit / total_in * 100) if total_in else 0
+            print(f"\n\033[2mtokens: in={u.input_tokens} out={u.output_tokens} "
+                  f"cache_hit={cache_hit} cache_miss={cache_miss} ({hit_pct:.0f}% hit)\033[0m")
             print()
             history = result.all_messages()
         except Exception as e:

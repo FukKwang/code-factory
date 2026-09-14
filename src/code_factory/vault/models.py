@@ -37,6 +37,15 @@ class TicketSummary(BaseModel):
     tags: list[str] = []
     summary: str = ""
     status: TicketStatus = TicketStatus.NEW
+    host_functions: list[str] = []
+    input_keys: list[str] = []
+
+
+class StructuralMatch(BaseModel):
+    ticket: TicketSummary
+    fn_overlap: float = 0.0
+    input_overlap: float = 0.0
+    match_type: str = "none"
 
 
 class RunRecord(BaseModel):
