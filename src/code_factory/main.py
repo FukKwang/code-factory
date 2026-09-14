@@ -1,24 +1,44 @@
+import argparse
 import asyncio
 import os
 import sys
 
-from .agents.orchestrator import FactoryDeps, build_orchestrator
-from .config import get_settings
-from .context.manager import compact_messages
-from .vault.manager import VaultManager
-
-settings = get_settings()
-
-os.environ.setdefault("OPENAI_API_KEY", settings.openai_api_key)
-os.environ.setdefault("OPENAI_BASE_URL", settings.openai_base_url)
-os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
-
-vault = VaultManager(settings.vault_path)
-deps = FactoryDeps(vault=vault, settings=settings)
-agent = build_orchestrator(settings)
+from .config import PROVIDER_PRESETS, Settings, get_settings
 
 
-async def _run_loop():
+def _parse_args():
+    p = argparse.ArgumentParser(prog="code-factory")
+    p.add_argument("--provider", "-p", choices=list(PROVIDER_PRESETS), help="model provider")
+    p.add_argument("--model", "-m", help="override model for all roles")
+    return p.parse_args()
+
+
+def _build(args):
+    overrides = {}
+    if args.provider:
+        overrides["provider"] = args.provider
+    if args.model:
+        for role in ("model_orchestrator", "model_researcher", "model_coder", "model_test_writer", "model_reviewer"):
+            overrides[role] = args.model
+
+    settings = Settings(**overrides) if overrides else get_settings()
+
+    os.environ.setdefault("OPENAI_API_KEY", settings.openai_api_key)
+    os.environ.setdefault("OPENAI_BASE_URL", settings.openai_base_url)
+    os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
+
+    from .agents.orchestrator import FactoryDeps, build_orchestrator
+    from .context.manager import compact_messages, maybe_compact
+    from .vault.manager import VaultManager
+
+    vault = VaultManager(settings.vault_path)
+    deps = FactoryDeps(vault=vault, settings=settings)
+    agent = build_orchestrator(settings)
+    return settings, deps, agent, compact_messages, maybe_compact
+
+
+async def _run_loop(settings, deps, agent, compact_messages, maybe_compact):
+    print(f"provider: {settings.provider}  model: {settings.model_orchestrator}")
     history = []
     while True:
         try:
@@ -30,17 +50,16 @@ async def _run_loop():
         if user_input.lower() in ("exit", "quit", "q"):
             break
 
-        # Reset tool call counts each turn
         deps._tool_counts = None
 
         try:
+            history = maybe_compact(history, settings.max_tokens)
             result = await agent.run(user_input, deps=deps, message_history=history)
             print(result.output)
             print()
-            history = compact_messages(result.all_messages())
+            history = result.all_messages()
         except Exception as e:
             print(f"Error: {type(e).__name__}: {e}")
-            # On token limit errors, aggressively compact and continue
             if "token limit" in str(e).lower() or "exceeded" in str(e).lower():
                 history = compact_messages(history, keep_last=2)
                 print("(context compacted, try again)")
@@ -48,10 +67,12 @@ async def _run_loop():
 
 
 def main():
+    args = _parse_args()
+    settings, deps, agent, compact_messages, maybe_compact = _build(args)
+
     if sys.stdin.isatty():
-        asyncio.run(_run_loop())
+        asyncio.run(_run_loop(settings, deps, agent, compact_messages, maybe_compact))
     else:
-        # Pipe mode: single input, use built-in CLI
         agent.to_cli_sync(deps=deps)
 
 

@@ -1,13 +1,13 @@
 from pydantic_ai import Agent
 from pydantic_ai.settings import ModelSettings
 
-from ..config import get_settings
+from ..config import get_settings, resolve_model
 
 
 def build_reviewer() -> Agent:
     settings = get_settings()
     return Agent(
-        settings.model_reviewer,
+        resolve_model(settings.model_reviewer, settings),
         output_type=str,
         model_settings=ModelSettings(max_tokens=settings.max_tokens),
         instructions="""\

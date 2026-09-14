@@ -1,7 +1,7 @@
 from pydantic_ai import Agent
 from pydantic_ai.settings import ModelSettings
 
-from ..config import get_settings
+from ..config import get_settings, resolve_model
 
 MONTY_LIMITATIONS = """\
 Write Python for Monty sandbox.
@@ -28,7 +28,7 @@ Return ONLY Python code. No markdown, no explanations, no comments."""
 def build_coder() -> Agent:
     settings = get_settings()
     return Agent(
-        settings.model_coder,
+        resolve_model(settings.model_coder, settings),
         output_type=str,
         model_settings=ModelSettings(max_tokens=settings.max_tokens),
         instructions=MONTY_LIMITATIONS,

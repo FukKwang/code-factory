@@ -11,6 +11,16 @@ def estimate_tokens(text: str) -> int:
     return len(text) // 4
 
 
+def estimate_history_tokens(messages: list[ModelMessage]) -> int:
+    """Estimate total tokens in message history."""
+    total = 0
+    for msg in messages:
+        for part in msg.parts:
+            total += estimate_tokens(str(getattr(part, 'content', '')))
+            total += estimate_tokens(str(getattr(part, 'args', '')))
+    return total
+
+
 def truncate_for_context(text: str, max_tokens: int) -> str:
     max_chars = max_tokens * 4
     if len(text) <= max_chars:
@@ -26,10 +36,10 @@ def write_findings_file(directory: Path, name: str, content: str) -> Path:
 
 
 def compact_messages(messages: list[ModelMessage], keep_last: int = 4) -> list[ModelMessage]:
-    """Compact message history by truncating old tool results.
+    """Compact old tool results to free tokens while preserving KV cache prefix.
 
-    Keeps last `keep_last` messages intact. Earlier tool return parts
-    get their content replaced with a short summary.
+    Compacts from the FRONT: oldest tool returns get stubbed first.
+    Recent messages (keep_last) stay byte-identical for cache reuse.
     """
     from pydantic_ai.messages import ModelRequest, ToolReturnPart
 
@@ -63,3 +73,26 @@ def compact_messages(messages: list[ModelMessage], keep_last: int = 4) -> list[M
             compacted.append(msg)
 
     return compacted
+
+
+def maybe_compact(messages: list[ModelMessage], max_tokens: int) -> list[ModelMessage]:
+    """Only compact when approaching token budget. Preserves KV cache prefix.
+
+    KV cache optimization: LLM servers match token prefixes to reuse cached
+    key-value pairs. Modifying old messages breaks prefix match, forcing full
+    recomputation. So we keep history byte-identical between turns and only
+    compact when token budget forces it.
+
+    Strategy (from Leyline/DeepSeek patterns):
+    - Below 70% budget: no change (full cache reuse)
+    - 70-90%: light compact (keep_last=6, stubs for old tool returns)
+    - 90%+: aggressive compact (keep_last=2)
+    """
+    used = estimate_history_tokens(messages)
+    ratio = used / max(max_tokens, 1)
+
+    if ratio < 0.7:
+        return messages
+    if ratio < 0.9:
+        return compact_messages(messages, keep_last=6)
+    return compact_messages(messages, keep_last=2)

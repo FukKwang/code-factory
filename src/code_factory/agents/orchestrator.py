@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.settings import ModelSettings
 
-from ..config import Settings, get_settings
+from ..config import Settings, get_settings, resolve_model
 from ..context.manager import write_findings_file
 from ..sandbox.host_functions import HOST_FUNCTION_DESCRIPTIONS
 from ..sandbox.runner import RunResult, run_solution, run_tests
@@ -166,7 +166,7 @@ def build_orchestrator(settings: Settings | None = None) -> Agent:
     ms = ModelSettings(max_tokens=settings.max_tokens)
 
     agent: Agent[FactoryDeps, str] = Agent(
-        settings.model_orchestrator,
+        resolve_model(settings.model_orchestrator, settings),
         deps_type=FactoryDeps,
         model_settings=ms,
         instructions=f"""Coding agent that creates REUSABLE programs.

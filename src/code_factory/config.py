@@ -1,24 +1,79 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+PROVIDER_PRESETS: dict[str, dict] = {
+    "local": {
+        "model": "openai-chat:ling-3.0-tiny",
+        "max_tokens": 32768,
+    },
+    "deepseek": {
+        "model": "deepseek:deepseek-chat",
+        "max_tokens": 8192,
+    },
+}
 
 
 class Settings(BaseSettings):
     vault_path: Path = Path("/home/kwang/Documents/dev/code-factory-repo")
 
-    model_orchestrator: str = "openai-chat:ling-3.0-tiny"
-    model_researcher: str = "openai-chat:ling-3.0-tiny"  # cheap: structured analysis
-    model_coder: str = "openai-chat:ling-3.0-tiny"
-    model_test_writer: str = "openai-chat:ling-3.0-tiny"  # cheap: assert generation
-    model_reviewer: str = "openai-chat:ling-3.0-tiny"  # cheap: plain-language summary
+    provider: str = "local"
 
-    max_tokens: int = 32768
+    model_orchestrator: str = ""
+    model_researcher: str = ""
+    model_coder: str = ""
+    model_test_writer: str = ""
+    model_reviewer: str = ""
+
+    max_tokens: int = 0
 
     openai_base_url: str = "http://localhost:8081/v1"
     openai_api_key: str = "not-needed"
 
+    deepseek_api_key: str = ""
+    deepseek_base_url: str = "https://api.deepseek.com"
+
     model_config = SettingsConfigDict(env_prefix="CODE_FACTORY_", env_file=".env")
+
+    @model_validator(mode="after")
+    def _apply_preset(self):
+        preset = PROVIDER_PRESETS.get(self.provider, {})
+        default_model = preset.get("model", "openai-chat:ling-3.0-tiny")
+        default_max = preset.get("max_tokens", 32768)
+
+        if not self.model_orchestrator:
+            self.model_orchestrator = default_model
+        if not self.model_researcher:
+            self.model_researcher = default_model
+        if not self.model_coder:
+            self.model_coder = default_model
+        if not self.model_test_writer:
+            self.model_test_writer = default_model
+        if not self.model_reviewer:
+            self.model_reviewer = default_model
+        if not self.max_tokens:
+            self.max_tokens = default_max
+        return self
+
+
+def resolve_model(model_str: str, settings: Settings):
+    """Resolve model string to pydantic-ai model. Supports deepseek: prefix."""
+    if model_str.startswith("deepseek:"):
+        if not settings.deepseek_api_key:
+            raise ValueError("deepseek: model requires CODE_FACTORY_DEEPSEEK_API_KEY")
+        from pydantic_ai.models.openai import OpenAIChatModel
+        from pydantic_ai.providers.openai import OpenAIProvider
+
+        model_name = model_str.split(":", 1)[1]
+        provider = OpenAIProvider(
+            base_url=settings.deepseek_base_url,
+            api_key=settings.deepseek_api_key,
+        )
+        return OpenAIChatModel(model_name, provider=provider)
+    return model_str
 
 
 @lru_cache

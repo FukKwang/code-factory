@@ -1,7 +1,7 @@
 from pydantic_ai import Agent
 from pydantic_ai.settings import ModelSettings
 
-from ..config import get_settings
+from ..config import get_settings, resolve_model
 from ..sandbox.host_functions import HOST_FUNCTION_DESCRIPTIONS
 
 
@@ -9,7 +9,7 @@ def build_researcher() -> Agent:
     fn_docs = "\n".join(f"- {desc}" for desc in HOST_FUNCTION_DESCRIPTIONS.values())
     settings = get_settings()
     return Agent(
-        settings.model_researcher,
+        resolve_model(settings.model_researcher, settings),
         output_type=str,
         model_settings=ModelSettings(max_tokens=settings.max_tokens),
         instructions=f"""You analyze requirements for a coding task.
