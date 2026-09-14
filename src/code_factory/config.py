@@ -9,14 +9,17 @@ PROVIDER_PRESETS: dict[str, dict] = {
     "ling": {
         "model": "openai-chat:ling-3.0-tiny",
         "max_tokens": 32768,
+        "single_agent": False,
     },
     "qwen": {
         "model": "qwen:qwen3-59b",
         "max_tokens": 32768,
+        "single_agent": False,
     },
     "deepseek": {
         "model": "deepseek:deepseek-flash",
         "max_tokens": 8192,
+        "single_agent": True,
     },
 }
 
@@ -59,6 +62,7 @@ class Settings(BaseSettings):
     model_test_writer: str = ""
     model_reviewer: str = ""
 
+    single_agent: bool = False
     max_tokens: int = 0
 
     openai_base_url: str = "http://localhost:8081/v1"
@@ -90,6 +94,8 @@ class Settings(BaseSettings):
             self.model_reviewer = default_model
         if not self.max_tokens:
             self.max_tokens = default_max
+        if not self.single_agent and preset.get("single_agent"):
+            self.single_agent = preset["single_agent"]
         return self
 
 

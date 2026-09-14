@@ -52,6 +52,9 @@ async def _run_loop(settings, deps, agent, compact_messages, maybe_compact):
         if user_input.lower() in ("clear", "/clear", "reset", "/reset"):
             history = []
             deps._tool_counts = None
+            ph = getattr(agent, "_pipeline_history", None)
+            if ph is not None:
+                ph.clear()
             print("Session cleared.\n")
             continue
 
@@ -59,15 +62,22 @@ async def _run_loop(settings, deps, agent, compact_messages, maybe_compact):
 
         try:
             history = maybe_compact(history, settings.max_tokens)
+            pu = getattr(agent, "_pipeline_usage", None)
+            if pu:
+                pu["cache_hit"] = pu["cache_miss"] = pu["output"] = 0
             result = await agent.run(user_input, deps=deps, message_history=history)
             print(result.output)
             u = result.usage
             details = u.details or {}
             cache_hit = details.get("prompt_cache_hit_tokens", 0)
             cache_miss = details.get("prompt_cache_miss_tokens", 0)
+            if pu:
+                cache_hit += pu["cache_hit"]
+                cache_miss += pu["cache_miss"]
             total_in = cache_hit + cache_miss
             hit_pct = (cache_hit / total_in * 100) if total_in else 0
-            print(f"\n\033[2mtokens: in={u.input_tokens} out={u.output_tokens} "
+            total_out = u.output_tokens + (pu["output"] if pu else 0)
+            print(f"\n\033[2mtokens: in={cache_hit + cache_miss} out={total_out} "
                   f"cache_hit={cache_hit} cache_miss={cache_miss} ({hit_pct:.0f}% hit)\033[0m")
             print()
             history = result.all_messages()
