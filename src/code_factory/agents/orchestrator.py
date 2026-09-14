@@ -69,6 +69,41 @@ def _strip_fences(code: str) -> str:
     return code
 
 
+def _clean_llm_code(text: str) -> str:
+    """Extract code from LLM response. Handles fences, preamble, trailing explanation."""
+    # Find fenced code block anywhere in response
+    m = re.search(r'```(?:python)?\s*\n(.*?)```', text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    # Strip leading prose lines (small models add "Here's the code:" etc)
+    lines = text.strip().split("\n")
+    start = 0
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped and (stripped.startswith(("import ", "from ", "def ", "class ", "result", "#"))
+                         or re.match(r'^[a-z_]\w*\s*=', stripped)
+                         or stripped.startswith("assert ")):
+            start = i
+            break
+    # Strip trailing prose after code
+    end = len(lines)
+    for i in range(len(lines) - 1, start, -1):
+        stripped = lines[i].strip()
+        if not stripped or stripped.startswith(("#", "assert ", "result")) or re.match(r'^[a-z_)\]\}]', stripped):
+            end = i + 1
+            break
+    return "\n".join(lines[start:end]).strip()
+
+
+def _syntax_check(code: str) -> str | None:
+    """Return error string if code has syntax errors, None if valid."""
+    try:
+        compile(code, "<check>", "exec")
+        return None
+    except SyntaxError as e:
+        return f"line {e.lineno}: {e.msg}"
+
+
 def _fn_docs(allowlist: list[str]) -> str:
     return "\n".join(
         f"- {HOST_FUNCTION_DESCRIPTIONS[f]}" for f in allowlist
@@ -429,6 +464,8 @@ CRITICAL: Use exact markers ===RESEARCH===, ===TESTS===, ===CODE===, ===REVIEW==
         schema_doc = "\n".join(f"  - {k}: {v}" for k, v in ticket.input_schema.items())
         test_inputs = runtime_inputs or {k: "test" for k in ticket.input_schema}
 
+        MAX_RETRIES = 0 if _pipeline_agent else 1
+
         if _pipeline_agent:
             # Single-call pipeline: one LLM call generates research + tests + code + review
             _status("🚀", "pipeline generating research + tests + code...")
@@ -437,8 +474,8 @@ CRITICAL: Use exact markers ===RESEARCH===, ===TESTS===, ===CODE===, ===REVIEW==
 
             sections = await _run_pipeline(spec, fn_doc, schema_doc)
             findings = sections.get("research", "")
-            test_code = _strip_fences(sections.get("tests", ""))
-            code = _strip_fences(sections.get("code", ""))
+            test_code = _clean_llm_code(sections.get("tests", ""))
+            code = _clean_llm_code(sections.get("code", ""))
             review = sections.get("review", "")
 
             test_code, test_warnings = _verify_tests(test_code)
@@ -481,7 +518,7 @@ CRITICAL: Use exact markers ===RESEARCH===, ===TESTS===, ===CODE===, ===REVIEW==
             test_prompt += "Write assert statements to validate `result`. Return only code."
 
             test_code = await _llm_call("test_writer", test_prompt)
-            test_code = _strip_fences(test_code)
+            test_code = _clean_llm_code(test_code)
             test_code, test_warnings = _verify_tests(test_code)
             vault.write_stage_file(ticket_id, "test_solution.py", test_code)
             ticket.status = TicketStatus.TESTS_DRAFTED
@@ -501,7 +538,7 @@ CRITICAL: Use exact markers ===RESEARCH===, ===TESTS===, ===CODE===, ===REVIEW==
             code_prompt += "Return only Python code."
 
             code = await _llm_call("coder", code_prompt)
-            code = _strip_fences(code)
+            code = _clean_llm_code(code)
             code, code_warnings = _verify_code(code, ticket.host_function_allowlist, spec, ticket.input_schema)
             vault.write_stage_file(ticket_id, "solution.py", code)
             ticket.status = TicketStatus.CODE_DRAFTED
@@ -510,13 +547,43 @@ CRITICAL: Use exact markers ===RESEARCH===, ===TESTS===, ===CODE===, ===REVIEW==
 
             review = ""
 
-        # Run tests
-        _status("🧪", "running tests...")
-        test_result = run_tests(code, test_code, ticket.host_function_allowlist, test_inputs, limits=limits)
-        if test_result.passed:
-            _status("✅", "tests passed")
-        else:
+        # Syntax check + retry loop
+        for attempt in range(MAX_RETRIES + 1):
+            syntax_err = _syntax_check(code)
+            if syntax_err and attempt < MAX_RETRIES:
+                _status("🔧", f"syntax error, retrying: {syntax_err}")
+                fix_prompt = (
+                    f"This code has a syntax error: {syntax_err}\n\n{code}\n\n"
+                    f"Fix the error. Return only Python code."
+                )
+                code = _clean_llm_code(await _llm_call("coder", fix_prompt))
+                code, _ = _verify_code(code, ticket.host_function_allowlist, spec, ticket.input_schema)
+                vault.write_stage_file(ticket_id, "solution.py", code)
+                vault.commit(ticket_id, f"syntax fix attempt {attempt + 1}")
+                continue
+            if syntax_err:
+                return f"Failed: syntax error in generated code: {syntax_err}"
+
+            _status("🧪", "running tests...")
+            test_result = run_tests(code, test_code, ticket.host_function_allowlist, test_inputs, limits=limits)
+            if test_result.passed:
+                _status("✅", "tests passed")
+                break
+
             _status("❌", f"tests failed: {'; '.join(test_result.failures[:2])}")
+            if attempt < MAX_RETRIES:
+                _status("🔧", "retrying code generation with error feedback...")
+                fix_prompt = (
+                    f"Code failed tests.\nError: {'; '.join(test_result.failures[:3])}\n\n"
+                    f"Code:\n{code}\n\nTests:\n{test_code}\n\n"
+                    f"Host functions:\n{fn_doc}\n\n"
+                    f"Fix the code to pass tests. Return only Python code."
+                )
+                code = _clean_llm_code(await _llm_call("coder", fix_prompt))
+                code, _ = _verify_code(code, ticket.host_function_allowlist, spec, ticket.input_schema)
+                vault.write_stage_file(ticket_id, "solution.py", code)
+                vault.commit(ticket_id, f"test fix attempt {attempt + 1}")
+
         vault.commit(ticket_id, f"tests {'pass' if test_result.passed else 'fail'}")
 
         # Run solution
@@ -591,8 +658,8 @@ CRITICAL: Use exact markers ===RESEARCH===, ===TESTS===, ===CODE===, ===REVIEW==
                 + "\nGenerate all sections: RESEARCH, TESTS, CODE, REVIEW."
             )
             sections = await _run_pipeline(iterate_prompt, "", "")
-            new_test_code = _strip_fences(sections.get("tests", test_code))
-            code = _strip_fences(sections.get("code", current_code))
+            new_test_code = _clean_llm_code(sections.get("tests", test_code))
+            code = _clean_llm_code(sections.get("code", current_code))
         else:
             new_test_code = await _llm_call("test_writer",
                 f"Original spec:\n{spec[:300]}\nFeedback:\n{feedback}\n"
@@ -601,7 +668,7 @@ CRITICAL: Use exact markers ===RESEARCH===, ===TESTS===, ===CODE===, ===REVIEW==
                 + (f"Input parameters:\n{schema_doc}\n" if schema_doc else "")
                 + "Update tests to cover feedback. Keep original assertions. Add new ones. Return only code."
             )
-            new_test_code = _strip_fences(new_test_code)
+            new_test_code = _clean_llm_code(new_test_code)
             code = await _llm_call("coder",
                 f"Modify code. Keep requirements.\nSpec:\n{spec[:300]}\nCode:\n{current_code}\n"
                 f"Feedback:\n{feedback}\nTests to pass:\n{new_test_code}\n"
@@ -609,7 +676,7 @@ CRITICAL: Use exact markers ===RESEARCH===, ===TESTS===, ===CODE===, ===REVIEW==
                 + (f"Input parameters in `inputs` dict:\n{schema_doc}\n" if schema_doc else "")
                 + "Return only Python code."
             )
-            code = _strip_fences(code)
+            code = _clean_llm_code(code)
 
         new_test_code, _ = _verify_tests(new_test_code)
         vault.write_stage_file(ticket_id, "test_solution.py", new_test_code)
@@ -620,10 +687,36 @@ CRITICAL: Use exact markers ===RESEARCH===, ===TESTS===, ===CODE===, ===REVIEW==
         vault.save_ticket(ticket)
         vault.commit(ticket_id, f"iterate: {feedback[:40]}")
 
-        # Run tests + solution
+        # Syntax check + retry loop
         limits = ctx.deps.settings.sandbox.clamp(sandbox_limits)
         test_inputs = runtime_inputs or {k: "test" for k in ticket.input_schema}
-        test_result = run_tests(code, new_test_code, ticket.host_function_allowlist, test_inputs, limits=limits)
+        MAX_ITER_RETRIES = 0 if _pipeline_agent else 1
+
+        for attempt in range(MAX_ITER_RETRIES + 1):
+            syntax_err = _syntax_check(code)
+            if syntax_err and attempt < MAX_ITER_RETRIES:
+                _status("🔧", f"syntax error, retrying: {syntax_err}")
+                code = _clean_llm_code(await _llm_call("coder",
+                    f"Syntax error: {syntax_err}\n\n{code}\n\nFix. Return only Python code."))
+                code, _ = _verify_code(code, ticket.host_function_allowlist, spec + "\n" + feedback, ticket.input_schema)
+                vault.write_stage_file(ticket_id, "solution.py", code)
+                vault.commit(ticket_id, f"iterate syntax fix {attempt + 1}")
+                continue
+            if syntax_err:
+                return f"Updated but syntax error: {syntax_err}"
+
+            test_result = run_tests(code, new_test_code, ticket.host_function_allowlist, test_inputs, limits=limits)
+            if test_result.passed:
+                break
+            if attempt < MAX_ITER_RETRIES:
+                _status("🔧", f"tests failed, retrying: {'; '.join(test_result.failures[:2])}")
+                code = _clean_llm_code(await _llm_call("coder",
+                    f"Code failed tests.\nError: {'; '.join(test_result.failures[:3])}\n\n"
+                    f"Code:\n{code}\n\nTests:\n{new_test_code}\n\nFix. Return only Python code."))
+                code, _ = _verify_code(code, ticket.host_function_allowlist, spec + "\n" + feedback, ticket.input_schema)
+                vault.write_stage_file(ticket_id, "solution.py", code)
+                vault.commit(ticket_id, f"iterate test fix {attempt + 1}")
+
         run_result = _run_and_record(vault, ticket_id, code, ticket.host_function_allowlist, test_inputs, limits=limits, interactive=sys.stdin.isatty())
 
         if run_result.success and test_result.passed:
