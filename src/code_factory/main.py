@@ -61,7 +61,7 @@ async def _run_loop(settings, deps, agent, compact_messages, maybe_compact):
         deps._tool_counts = None
 
         try:
-            history = maybe_compact(history, settings.max_tokens)
+            history = maybe_compact(history, settings.context_window)
             pu = getattr(agent, "_pipeline_usage", None)
             if pu:
                 pu["cache_hit"] = pu["cache_miss"] = pu["output"] = 0

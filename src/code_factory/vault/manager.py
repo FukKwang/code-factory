@@ -35,9 +35,15 @@ class VaultManager:
         )
 
     def next_id(self) -> str:
-        existing = sorted(self.tickets_dir.iterdir()) if self.tickets_dir.exists() else []
-        n = len(existing) + 1
-        return f"TICKET-{n:03d}"
+        max_n = 0
+        if self.tickets_dir.exists():
+            for p in self.tickets_dir.iterdir():
+                if p.is_dir() and p.name.startswith("TICKET-"):
+                    try:
+                        max_n = max(max_n, int(p.name.split("-")[1]))
+                    except ValueError:
+                        pass
+        return f"TICKET-{max_n + 1:03d}"
 
     def ticket_dir(self, ticket_id: str) -> Path:
         return self.tickets_dir / ticket_id
