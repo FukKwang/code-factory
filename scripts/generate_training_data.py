@@ -585,6 +585,140 @@ TASKS = [
         "host_functions": ["query_borrower", "query_transactions", "aggregate_data"],
         "input_schema": {"borrower_name": "Borrower name"},
     },
+
+    # --- BATCH 11: Multi-city loops (weak pattern) ---
+    {
+        "title": "Compare total outstanding across cities",
+        "spec": "Given comma-separated cities in inputs['cities'], split by comma. For each city call query_portfolio_summary({'city': city}). Collect total_outstanding from each result. Return dict mapping city to total_outstanding plus a grand_total key with sum.",
+        "host_functions": ["query_portfolio_summary"],
+        "input_schema": {"cities": "Comma-separated city names"},
+    },
+    {
+        "title": "Average credit score per city",
+        "spec": "Given comma-separated cities, for each city get borrowers (limit 10). Compute average credit_score per city. Return dict mapping city to avg_credit_score.",
+        "host_functions": ["query_borrowers_by_city"],
+        "input_schema": {"cities": "Comma-separated city names"},
+    },
+    {
+        "title": "NPL ratio comparison across cities",
+        "spec": "Given comma-separated cities, get portfolio summary for each. Return list of dicts with city and npl_ratio, sorted by npl_ratio descending.",
+        "host_functions": ["query_portfolio_summary"],
+        "input_schema": {"cities": "Comma-separated city names"},
+    },
+    {
+        "title": "Total loans and average DPD per city",
+        "spec": "Given comma-separated cities. For each city: get borrowers (limit 5), then loans for each borrower. Count total loans and compute average DPD across all loans in that city. Return list of dicts with city, total_loans, avg_dpd.",
+        "host_functions": ["query_borrowers_by_city", "query_loans"],
+        "input_schema": {"cities": "Comma-separated city names"},
+    },
+    {
+        "title": "City with highest average loan amount",
+        "spec": "Given comma-separated cities. For each city get portfolio summary. Find city with highest avg_loan_amount. Return dict with best_city, avg_loan_amount, and all_cities list of dicts.",
+        "host_functions": ["query_portfolio_summary"],
+        "input_schema": {"cities": "Comma-separated city names"},
+    },
+    {
+        "title": "Cross-city delinquency comparison",
+        "spec": "Given comma-separated cities. For each city get borrowers (limit 5), then loans. Count loans with dpd > 0 and total loans. Compute delinquency_rate = delinquent / total. Return list of dicts with city, delinquent_count, total_loans, delinquency_rate sorted by rate descending.",
+        "host_functions": ["query_borrowers_by_city", "query_loans"],
+        "input_schema": {"cities": "Comma-separated city names"},
+    },
+
+    # --- BATCH 12: Correct host function selection (collateral vs guarantor confusion) ---
+    {
+        "title": "Total collateral value for borrower",
+        "spec": "Given borrower name, get borrower profile, then loans, then for EACH loan call query_collateral({'loan_id': loan['loan_id']}). Sum all appraised_value across all collateral items. Return dict with borrower_name, total_collateral_value, collateral_count.",
+        "host_functions": ["query_borrower", "query_loans", "query_collateral"],
+        "input_schema": {"borrower_name": "Borrower name"},
+    },
+    {
+        "title": "Collateral summary per loan",
+        "spec": "Given borrower name, get borrower then loans. For each loan call query_collateral with loan_id. Return list of dicts with loan_id, loan_amount, collateral_items (count), total_collateral_value (sum of appraised_value), coverage_ratio (total_collateral / loan_amount).",
+        "host_functions": ["query_borrower", "query_loans", "query_collateral"],
+        "input_schema": {"borrower_name": "Borrower name"},
+    },
+    {
+        "title": "Collateral type breakdown for city",
+        "spec": "Get borrowers in city (limit 5), loans for each, collateral for each loan. Group all collateral by type field. For each type compute count and total_value (sum of appraised_value). Return dict mapping type to dict with count and total_value.",
+        "host_functions": ["query_borrowers_by_city", "query_loans", "query_collateral"],
+        "input_schema": {"city": "City name"},
+    },
+    {
+        "title": "Guarantor list for borrower",
+        "spec": "Given borrower name, get borrower profile using query_borrower. Then call query_guarantors({'borrower_id': borrower['borrower_id']}). Return list of guarantor dicts.",
+        "host_functions": ["query_borrower", "query_guarantors"],
+        "input_schema": {"borrower_name": "Borrower name"},
+    },
+    {
+        "title": "Guarantor total exposure for city",
+        "spec": "Get borrowers in city (limit 5). For each borrower call query_guarantors with borrower_id. Collect all guarantors. Group by guarantor name, sum guarantee_amount. Return list of dicts with guarantor_name and total_exposure sorted descending.",
+        "host_functions": ["query_borrowers_by_city", "query_guarantors"],
+        "input_schema": {"city": "City name"},
+    },
+
+    # --- BATCH 13: Filter then aggregate (weak pattern) ---
+    {
+        "title": "Total amount of active loans in city",
+        "spec": "Get borrowers in city (limit 5), loans for each. Filter to loans where status == 'active'. Sum their amounts. Return dict with city, active_loan_count, total_active_amount.",
+        "host_functions": ["query_borrowers_by_city", "query_loans"],
+        "input_schema": {"city": "City name"},
+    },
+    {
+        "title": "Average payment amount for completed payments",
+        "spec": "Given borrower name, get borrower, loans, payments for each loan. Filter payments where status == 'completed'. Compute average amount of completed payments. Return dict with total_completed, avg_amount.",
+        "host_functions": ["query_borrower", "query_loans", "query_payments"],
+        "input_schema": {"borrower_name": "Borrower name"},
+    },
+    {
+        "title": "Count defaulted loans per city",
+        "spec": "Given comma-separated cities. For each city get borrowers (limit 5), then loans. Count loans where status == 'defaulted'. Return dict mapping city to defaulted_count.",
+        "host_functions": ["query_borrowers_by_city", "query_loans"],
+        "input_schema": {"cities": "Comma-separated city names"},
+    },
+    {
+        "title": "High DPD loans with collateral coverage",
+        "spec": "Get borrowers in city (limit 5), loans for each. Filter loans where dpd > int(inputs['min_dpd']). For each filtered loan get collateral. Compute coverage = sum(collateral appraised_value) / loan amount. Return list of dicts with loan_id, dpd, amount, collateral_value, coverage_ratio.",
+        "host_functions": ["query_borrowers_by_city", "query_loans", "query_collateral"],
+        "input_schema": {"city": "City name", "min_dpd": "Minimum DPD threshold"},
+    },
+    {
+        "title": "Restructured loans total by city",
+        "spec": "Given comma-separated cities. For each city get borrowers (limit 5), then loans. Filter loans where status == 'restructured'. Sum amounts. Return dict mapping city to dict with count and total_amount.",
+        "host_functions": ["query_borrowers_by_city", "query_loans"],
+        "input_schema": {"cities": "Comma-separated city names"},
+    },
+
+    # --- BATCH 14: Computed ranking (weak pattern) ---
+    {
+        "title": "Rank borrowers by debt to income ratio",
+        "spec": "Get borrowers in city. For each borrower get loans. Compute total_debt = sum of loan amounts for active loans. Compute ratio = total_debt / monthly_income. Return top N borrowers by ratio descending, as list of dicts with name, total_debt, monthly_income, ratio.",
+        "host_functions": ["query_borrowers_by_city", "query_loans"],
+        "input_schema": {"city": "City name", "top_n": "Number of top results"},
+    },
+    {
+        "title": "Rank cities by total loan volume",
+        "spec": "Given comma-separated cities. For each get portfolio summary. Sort by total_loans descending. Return sorted list of dicts with city and total_loans.",
+        "host_functions": ["query_portfolio_summary"],
+        "input_schema": {"cities": "Comma-separated city names"},
+    },
+    {
+        "title": "Top loans by remaining balance",
+        "spec": "Get borrowers in city (limit 5), loans for each. For each loan get payments. Compute total_paid = sum of completed payment amounts. Compute remaining = loan amount - total_paid. Return top N loans by remaining descending as list of dicts with loan_id, amount, total_paid, remaining.",
+        "host_functions": ["query_borrowers_by_city", "query_loans", "query_payments"],
+        "input_schema": {"city": "City name", "top_n": "Number of results"},
+    },
+    {
+        "title": "Borrowers sorted by number of loans",
+        "spec": "Get borrowers in city. For each get loans. Count loans per borrower. Sort by loan_count descending. Return list of dicts with borrower_name and loan_count.",
+        "host_functions": ["query_borrowers_by_city", "query_loans"],
+        "input_schema": {"city": "City name"},
+    },
+    {
+        "title": "Rank guarantors by average guarantee amount",
+        "spec": "Get borrowers in city (limit 5). For each get guarantors. Group all guarantors by name. Compute average guarantee_amount per guarantor. Return top N by avg_amount descending.",
+        "host_functions": ["query_borrowers_by_city", "query_guarantors"],
+        "input_schema": {"city": "City name", "top_n": "Number of top guarantors"},
+    },
 ]
 
 # ---------------------------------------------------------------------------
