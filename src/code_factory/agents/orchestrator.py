@@ -167,10 +167,14 @@ def _verify_code(code: str, allowlist: list[str], spec: str = "",
                 code += f"\nresult = {last_fn}({', '.join(args)})\n"
             warnings.append(f"auto-fixed: added result = {last_fn}() call")
 
-    # Check 2: host functions actually called
+    # Check 2: host functions actually called + auto-expand allowlist
     called = [fn for fn in allowlist if fn + "(" in code]
     if not called:
         warnings.append(f"WARNING: code calls none of {allowlist}. Likely hardcoded data.")
+    for fn in HOST_FUNCTION_DESCRIPTIONS:
+        if fn not in allowlist and fn + "(" in code:
+            allowlist.append(fn)
+            warnings.append(f"auto-fixed: added {fn} to allowlist (used in code)")
 
     # Check 3: no function redefinitions of host functions
     for fn in allowlist:
