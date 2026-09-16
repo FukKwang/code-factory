@@ -314,22 +314,6 @@
     "review": "The code resolves the borrower by name using query_borrower, then fetches all loans via query_loans using the resolved borrower_id. For each loan it retrieves payments via query_payments and computes on_time_ratio as completed payments over total payments, guarding against division by zero when there are no payments (ratio set to 0). The overall consistency score is the mean of all per-loan ratios, or 0 when there are no loans. The output dict includes the borrower id, name, per-loan detail list, and the overall score, satisfying the spec and handling empty borrower/loan/payment edge cases."
   },
   {
-    "title": "Top performing loans by interest earned",
-    "spec": "Get borrowers in a city, then loans. For each loan with status 'active', estimate interest_earned = amount * interest_rate / 100 * tenor_months / 12. Sort by interest_earned descending. Return top N as list of dicts with loan_id, amount, interest_rate, interest_earned.",
-    "host_functions": [
-      "query_borrowers_by_city",
-      "query_loans"
-    ],
-    "input_schema": {
-      "city": "City name",
-      "top_n": "Number of top loans"
-    },
-    "research": "1) OBJECTIVE: Given a city, fetch borrowers in that city (up to some limit), then for each borrower fetch their loans, filter loans with status 'active', compute interest_earned = amount * interest_rate / 100 * tenor_months / 12, sort descending, return top N as dicts with loan_id, amount, interest_rate, interest_earned.\n\n2) DATA NEEDED: borrowers list (to get borrower_id), loans per borrower (loan_id, amount, tenor_months, interest_rate, status).\n\n3) HOST FUNCTIONS TO USE: query_borrowers_by_city({'city': str, 'limit': int}) -> list; query_loans({'borrower_id': str}) -> list.\n\n4) EDGE CASES: Empty borrowers list -> result empty list. Borrowers with no loans. Loans with missing/zero amount, tenor, or rate -> interest_earned 0. Missing keys guarded via .get defaults. top_n possibly larger than available loans. Sort tie-breaking stable by loan_id for determinism.",
-    "tests": "assert isinstance(result, list)\nassert len(result) <= inputs[\"top_n\"]\nfor item in result:\n    assert set(item.keys()) == {\"loan_id\", \"amount\", \"interest_rate\", \"interest_earned\"}\n    assert isinstance(item[\"loan_id\"], (str, type(None)))\n    assert item[\"interest_earned\"] is not None\nscores = [item[\"interest_earned\"] for item in result]\nassert scores == sorted(scores, reverse=True)\nfor item in result:\n    assert item[\"status\"] if \"status\" in item else True\nif result:\n    top = result[0]\n    assert top[\"interest_earned\"] == max(scores)",
-    "code": "def _get(d, key, default=None):\n    try:\n        v = d.get(key, default)\n    except Exception:\n        return default\n    return default if v is None else v\n\n\ndef _num(v):\n    try:\n        return float(v)\n    except Exception:\n        return 0.0\n\n\nborrowers = query_borrowers_by_city({\n    \"city\": inputs[\"city\"],\n    \"limit\": inputs.get(\"borrower_limit\", 10),\n})\nif not isinstance(borrowers, list):\n    borrowers = []\n\ncollected = []\nfor b in borrowers:\n    bid = _get(b, \"borrower_id\")\n    if bid is None:\n        continue\n    loans = query_loans({\"borrower_id\": bid})\n    if not isinstance(loans, list):\n        continue\n    for loan in loans:\n        status = _get(loan, \"status\")\n        if status != \"active\":\n            continue\n        amount = _num(_get(loan, \"amount\"))\n        rate = _num(_get(loan, \"interest_rate\"))\n        tenor = _num(_get(loan, \"tenor_months\"))\n        interest_earned = amount * rate / 100 * tenor / 12\n        collected.append({\n            \"loan_id\": _get(loan, \"loan_id\"),\n            \"amount\": amount,\n            \"interest_rate\": rate,\n            \"interest_earned\": interest_earned,\n        })\n\ncollected.sort(key=lambda x: x[\"interest_earned\"], reverse=True)\n\ntop_n_raw = inputs.get(\"top_n\", 10)\ntry:\n    top_n = int(top_n_raw)\nexcept Exception:\n    top_n = 10\nif top_n < 0:\n    top_n = 0\n\nresult = collected[:top_n]",
-    "review": "The code pulls borrowers for the given city via query_borrowers_by_city, iterates each borrower, fetches their loans via query_loans, filters to status 'active', and computes interest_earned using the specified formula. It then sorts descending by interest_earned and returns the top N as dicts containing loan_id, amount, interest_rate, and interest_earned. Edge cases such as empty borrower lists, missing loan keys, and non-numeric values are handled defensively, and the final result is a list bounded by inputs[\"top_n\"] sorted highest interest first."
-  },
-  {
     "title": "Restructured loan recovery analysis",
     "spec": "Get borrowers in a city (limit 5), then loans. Filter to loans where status is 'restructured'. For each, get payment history. Compute total_recovered = sum of payment amounts where status is 'completed'. Assign result as list of dicts with loan_id, original_amount, total_recovered, recovery_pct.",
     "host_functions": [
@@ -477,22 +461,6 @@
     "review": "The code retrieves all collection records for the provided loan_id via the host function, filters them to only those whose action_type matches the requested action_type, and sorts the matches by action_date so missing dates go last. The output bundles the loan_id, action_type, matched records, and a count, satisfying the requirement while handling empty results and missing fields gracefully."
   },
   {
-    "title": "Find low income borrowers with high debt",
-    "spec": "Get borrowers in a city. Filter to those with monthly_income below income_threshold. For each, get loans and sum amounts. Return borrowers where total loan amount exceeds 10x monthly income, sorted by ratio descending.",
-    "host_functions": [
-      "query_borrowers_by_city",
-      "query_loans"
-    ],
-    "input_schema": {
-      "city": "City name",
-      "income_threshold": "Max monthly income"
-    },
-    "research": "1) OBJECTIVE: From borrowers in the given city, keep those with monthly_income < income_threshold; for each compute total loan amount (sum of amounts); keep those where total loan amount > 10 * monthly_income; sort by ratio (total loan / monthly_income) descending.\n2) DATA NEEDED: borrower list for city (borrower_id, name, city, monthly_income), loans per borrower (amount).\n3) HOST FUNCTIONS TO USE: query_borrowers_by_city({'city', 'limit'}), query_loans({'borrower_id'}).\n4) EDGE CASES: empty city result, missing monthly_income (None/zero -> avoid division), loans list empty, missing 'amount', limit default 10 may truncate \u2014 pass a large limit to fetch more borrowers; skip zero income from ratio division; stable ordering on ties.",
-    "tests": "assert isinstance(result, list)\nassert all(isinstance(r, dict) for r in result)\nassert all(\"borrower_id\" in r for r in result)\nassert all(\"name\" in r for r in result)\nassert all(\"monthly_income\" in r for r in result)\nassert all(\"total_loan_amount\" in r for r in result)\nassert all(\"ratio\" in r for r in result)\nassert all(r[\"monthly_income\"] < inputs[\"income_threshold\"] for r in result)\nassert all(r[\"total_loan_amount\"] > 10 * r[\"monthly_income\"] for r in result)\nassert all(result[i][\"ratio\"] >= result[i+1][\"ratio\"] for i in range(len(result)-1))",
-    "code": "def safe_amount(loan):\n    value = loan.get(\"amount\")\n    if value is None:\n        return 0.0\n    try:\n        return float(value)\n    except (TypeError, ValueError):\n        return 0.0\n\ndef safe_income(borrower):\n    value = borrower.get(\"monthly_income\")\n    if value is None:\n        return None\n    try:\n        return float(value)\n    except (TypeError, ValueError):\n        return None\n\nthreshold = float(inputs[\"income_threshold\"])\ncity = inputs[\"city\"]\n\nborrowers = query_borrowers_by_city({\"city\": city, \"limit\": 1000})\n\ncandidates = []\nfor b in borrowers:\n    income = safe_income(b)\n    if income is None or income >= threshold:\n        continue\n    if income <= 0:\n        continue\n    loans = query_loans({\"borrower_id\": b.get(\"borrower_id\")})\n    total = 0.0\n    for loan in loans:\n        total += safe_amount(loan)\n    if total > 10 * income:\n        candidates.append({\n            \"borrower_id\": b.get(\"borrower_id\"),\n            \"name\": b.get(\"name\"),\n            \"city\": b.get(\"city\"),\n            \"credit_score\": b.get(\"credit_score\"),\n            \"monthly_income\": income,\n            \"total_loan_amount\": total,\n            \"ratio\": total / income,\n        })\n\ncandidates.sort(key=lambda r: r[\"ratio\"], reverse=True)\nresult = candidates",
-    "review": "The code fetches all borrowers in the requested city, filters to those with monthly income below the given threshold, retrieves each candidate's loans, and sums the amounts. Only borrowers whose total loan amount exceeds ten times their monthly income are kept, and results are sorted by the total-to-income ratio in descending order. Values are read from the inputs dict with no hardcoding, host functions are called directly, and edge cases like zero income or missing amounts are handled safely."
-  },
-  {
     "title": "Total outstanding by city",
     "spec": "Given list of cities, get portfolio summary for each. Return dict mapping city to total_outstanding, plus grand_total across all cities.",
     "host_functions": [
@@ -505,21 +473,6 @@
     "tests": "assert isinstance(result, dict)\nassert \"grand_total\" in result\nassert isinstance(result[\"grand_total\"], float)\n_cities = [c.strip() for c in str(inputs.get(\"cities\", \"\")).split(\",\") if c.strip()]\n_seen = []\nfor _c in _cities:\n    if _c not in _seen:\n        _seen.append(_c)\nfor _c in _seen:\n    assert _c in result\n    assert isinstance(result[_c], float)\nassert abs(result[\"grand_total\"] - sum(result[_c] for _c in _seen)) < 1e-6",
     "code": "cities_raw = str(inputs.get(\"cities\", \"\"))\ncities = [c.strip() for c in cities_raw.split(\",\") if c.strip()]\nseen = []\nfor c in cities:\n    if c not in seen:\n        seen.append(c)\n\nresult = {}\ngrand_total = 0.0\nfor city in seen:\n    summary = query_portfolio_summary({\"city\": city})\n    if summary is None:\n        summary = {}\n    val = summary.get(\"total_outstanding\", 0)\n    try:\n        val = float(val)\n    except (TypeError, ValueError):\n        val = 0.0\n    result[city] = val\n    grand_total += val\n\nresult[\"grand_total\"] = float(grand_total)",
     "review": "The code reads the comma-separated cities from inputs, dedupes while preserving order, queries the portfolio summary host function for each city, extracts total_outstanding safely with fallback to zero, stores it keyed by city, and accumulates a grand_total across all cities, which is added to the returned dict. It handles missing keys, non-numeric values, whitespace, duplicates, and empty input, producing a dict of city-to-outstanding plus grand_total as required."
-  },
-  {
-    "title": "Average loan tenor by product type",
-    "spec": "Get borrowers in a city, then loans. Group by product. Compute average tenor_months per product. Return dict mapping product to average tenor.",
-    "host_functions": [
-      "query_borrowers_by_city",
-      "query_loans"
-    ],
-    "input_schema": {
-      "city": "City name"
-    },
-    "research": "1) OBJECTIVE: For a given city, get borrowers, fetch each borrower's loans, group loans by product, compute average tenor_months per product, return a dict {product: avg_tenor}.\n2) DATA NEEDED: borrower list (for borrower_id), loans per borrower (product, tenor_months).\n3) HOST FUNCTIONS TO USE: query_borrowers_by_city({'city': inputs['city']}), query_loans({'borrower_id': bid}) for each borrower.\n4) EDGE CASES: No borrowers -> empty dict. Borrower with no loans -> skipped. Missing tenor_months -> skip that loan. Ties/rounding: round average reasonably. Products with only loans lacking tenor should not appear.",
-    "tests": "assert isinstance(result, dict)\nfor k, v in result.items():\n    assert isinstance(k, str)\n    assert isinstance(v, (int, float))\nassert all(isinstance(k, str) for k in result.keys())\nassert all(isinstance(v, (int, float)) for v in result.values())",
-    "code": "borrowers = query_borrowers_by_city({\"city\": inputs[\"city\"]})\nproduct_tenors = {}\nfor b in borrowers:\n    bid = b.get(\"borrower_id\")\n    if bid is None:\n        continue\n    loans = query_loans({\"borrower_id\": bid})\n    if not loans:\n        continue\n    for loan in loans:\n        product = loan.get(\"product\")\n        tenor = loan.get(\"tenor_months\")\n        if product is None or tenor is None:\n            continue\n        product_tenors.setdefault(product, []).append(tenor)\n\nresult = {}\nfor product, tenors in product_tenors.items():\n    if tenors:\n        result[product] = sum(tenors) / len(tenors)",
-    "review": "The code queries borrowers in the specified city using the city input parameter, then fetches loans for each borrower via their borrower_id. It groups loans by product and computes the average tenor_months per product, returning a dict mapping product to average tenor. Empty results, missing borrowers, and loans lacking product or tenor are handled gracefully, and the output matches the requirement of product-to-average-tenor mapping."
   },
   {
     "title": "Max DPD per borrower in city",
@@ -642,21 +595,6 @@
     "tests": "assert isinstance(result, list)\nassert len(result) <= inputs[\"top_n\"]\nassert all(isinstance(b, dict) for b in result)\nassert all(\"name\" in b and \"total_outstanding\" in b for b in result)\nassert all(set(b.keys()) == {\"name\", \"total_outstanding\"} for b in result)\nassert [b[\"total_outstanding\"] for b in result] == sorted([b[\"total_outstanding\"] for b in result], reverse=True)",
     "code": "def get_top_borrowers(city, top_n):\n    borrowers = query_borrowers_by_city({\"city\": city, \"limit\": top_n})\n    cleaned = []\n    for b in borrowers:\n        name = b.get(\"name\")\n        outstanding = b.get(\"total_outstanding\")\n        if outstanding is None:\n            outstanding = 0\n        cleaned.append({\"name\": name, \"total_outstanding\": outstanding})\n    cleaned.sort(key=lambda x: x[\"total_outstanding\"], reverse=True)\n    return cleaned[:top_n]\n\nresult = get_top_borrowers(inputs[\"city\"], inputs[\"top_n\"])",
     "review": "The code reads the city and top_n from the inputs dict, calls the query_borrowers_by_city host function to fetch real borrower records, projects each borrower down to a dict with only name and total_outstanding, sorts the list by total_outstanding in descending order, and returns the top N entries. It handles missing outstanding values by defaulting to zero, respects the top_n cap, and works generically for any city or N value provided at runtime."
-  },
-  {
-    "title": "Largest loan for each borrower in city",
-    "spec": "Get borrowers in a city, then loans for each. Find the largest loan (by amount) per borrower. Return list sorted by amount descending with borrower_name, loan_id, amount.",
-    "host_functions": [
-      "query_borrowers_by_city",
-      "query_loans"
-    ],
-    "input_schema": {
-      "city": "City name"
-    },
-    "research": "Objective: Given a city, fetch borrowers in that city, then fetch each borrower's loans, find the largest loan by amount per borrower, and return a list sorted by amount descending with borrower_name, loan_id, amount.\n\nData needed:\n- Borrowers in city: borrower_id, name\n- Loans per borrower: loan_id, amount\n\nHost functions:\n- query_borrowers_by_city({'city': str, 'limit': int}) -> list\n- query_loans({'borrower_id': str}) -> list\n\nEdge cases:\n- Borrower with no loans should be excluded (no largest loan).\n- Empty borrower list -> empty result.\n- Loans with missing/None amounts -> skip or treat carefully.\n- Multiple loans per borrower -> pick max by amount.\n- Sort descending by amount; tie-break optional but stable.",
-    "tests": "assert isinstance(result, list)\nassert all(isinstance(x, dict) for x in result)\nassert all(set(['borrower_name','loan_id','amount']).issubset(x.keys()) for x in result)\nassert all(isinstance(x['amount'], (int, float)) for x in result)\nassert all(x['amount'] == x['amount'] for x in result)  # no NaN check\namounts = [x['amount'] for x in result]\nassert amounts == sorted(amounts, reverse=True)\nnames = set()\nfor x in result:\n    assert isinstance(x['borrower_name'], str)\n    assert isinstance(x['loan_id'], str)\n    names.add(x['borrower_name'])\nassert len(names) == len(result)  # one entry per borrower",
-    "code": "borrowers = query_borrowers_by_city({'city': inputs['city'], 'limit': 100})\n\nresult = []\nfor b in borrowers:\n    loans = query_loans({'borrower_id': b['borrower_id']})\n    if not loans:\n        continue\n    best = None\n    for l in loans:\n        amt = l.get('amount')\n        if amt is None:\n            continue\n        if best is None or amt > best['amount']:\n            best = {'borrower_name': b['name'], 'loan_id': l['loan_id'], 'amount': amt}\n    if best is not None:\n        result.append(best)\n\nresult.sort(key=lambda x: x['amount'], reverse=True)",
-    "review": "The code fetches all borrowers in the specified city via query_borrowers_by_city, then for each borrower retrieves their loans via query_loans. It identifies each borrower's largest loan by amount, skipping borrowers without loans. The final list contains borrower_name, loan_id, and amount, sorted in descending order by amount, satisfying the requirement. Edge cases such as empty borrower lists and missing loan amounts are handled by skipping such entries."
   },
   {
     "title": "Rank payment methods by total volume",
@@ -1223,21 +1161,6 @@
     "review": "The code prompts the user for a borrower name via ask_user, passes that name to query_borrower, and assigns the returned borrower dict directly to result. This satisfies the requirement of looking up a borrower by user-provided name and exposing the full borrower record without any type inspection or mocking. The tests confirm result is a dict carrying borrower fields (or empty if not found)."
   },
   {
-    "title": "Loan product popularity ranking",
-    "spec": "Get borrowers in a city, then loans. Count loans per product type. Also compute total amount per product. Assign result as list of dicts with product, loan_count, total_amount sorted by loan_count descending. Use simple dict-based counting, no sets.",
-    "host_functions": [
-      "query_borrowers_by_city",
-      "query_loans"
-    ],
-    "input_schema": {
-      "city": "City name"
-    },
-    "research": "1) OBJECTIVE: For a given city, fetch borrowers, fetch loans for each, aggregate counts and total amount per product, output sorted list of dicts.\n2) DATA NEEDED: borrowers by city (with default limit 10), loans per borrower.\n3) HOST FUNCTIONS: query_borrowers_by_city({'city': inputs['city']}) and query_loans({'borrower_id': ...}).\n4) EDGE CASES: no borrowers -> empty list; missing product key; missing/None amount; borrowers with no loans; duplicate products aggregated via dict counting; sort by loan_count descending.",
-    "tests": "assert isinstance(result, list)\nassert all(isinstance(r, dict) for r in result)\nassert all(set(r.keys()) == {\"product\", \"loan_count\", \"total_amount\"} for r in result)\nassert all(isinstance(r[\"loan_count\"], int) for r in result)\nassert all(r[\"loan_count\"] >= 1 for r in result)\nassert result == sorted(result, key=lambda r: r[\"loan_count\"], reverse=True)\ntotals = {}\nfor r in result:\n    assert r[\"product\"] not in totals\n    totals[r[\"product\"]] = r\nassert sum(r[\"loan_count\"] for r in result) == sum(\n    len(query_loans({\"borrower_id\": b[\"borrower_id\"]}))\n    for b in query_borrowers_by_city({\"city\": inputs[\"city\"]})\n)\nassert all(r[\"total_amount\"] >= 0 for r in result)",
-    "code": "borrowers = query_borrowers_by_city({\"city\": inputs[\"city\"]})\n\ncounts = {}\namounts = {}\n\nfor borrower in borrowers:\n    borrower_id = borrower.get(\"borrower_id\")\n    if borrower_id is None:\n        continue\n    loans = query_loans({\"borrower_id\": borrower_id})\n    if not loans:\n        continue\n    for loan in loans:\n        product = loan.get(\"product\")\n        if product is None:\n            continue\n        amount = loan.get(\"amount\")\n        if amount is None:\n            amount = 0\n        try:\n            amount_value = float(amount)\n        except (TypeError, ValueError):\n            amount_value = 0.0\n        if product in counts:\n            counts[product] = counts[product] + 1\n        else:\n            counts[product] = 1\n        if product in amounts:\n            amounts[product] = amounts[product] + amount_value\n        else:\n            amounts[product] = amount_value\n\nresult = [\n    {\n        \"product\": product,\n        \"loan_count\": counts[product],\n        \"total_amount\": amounts[product],\n    }\n    for product in counts\n]\n\nresult = sorted(result, key=lambda r: r[\"loan_count\"], reverse=True)",
-    "review": "The code fetches all borrowers in the requested city using query_borrowers_by_city, then iterates each borrower to fetch their loans via query_loans, aggregating per-product counts and total amounts using plain dicts (no sets). It produces a list of dicts with product, loan_count, and total_amount, sorted by loan_count descending, and handles edge cases like borrowers with no loans, missing products, and missing or non-numeric amounts. Counts across products sum to the total number of loans fetched, matching the requirement."
-  },
-  {
     "title": "Delinquency trend across severity buckets",
     "spec": "Get all delinquency stats (bucket=None). Each bucket dict has keys: bucket, loan_count, total_outstanding, avg_dpd, recovery_rate. Sum total_outstanding across all buckets. For each bucket compute share_pct = bucket's total_outstanding / overall total * 100. Assign result as list of dicts with bucket, share_pct, loan_count.",
     "host_functions": [
@@ -1264,21 +1187,6 @@
     "tests": "assert result is not None or result is None\nassert \"top_collateral\" in result\nassert \"borrower\" in result\nassert \"loans\" in result\nassert result[\"borrower\"] is not None\nassert isinstance(result[\"loans\"], list)\nassert isinstance(result[\"top_collateral\"], dict)\nassert \"collateral_id\" in result[\"top_collateral\"]\nassert \"appraised_value\" in result[\"top_collateral\"]\nassert all(\"loan_id\" in c for c in result.get(\"all_collateral\", []))\ntc = result[\"top_collateral\"]\nallc = result.get(\"all_collateral\", [])\nif allc:\n    assert tc[\"appraised_value\"] >= max(c.get(\"appraised_value\", 0) for c in allc)",
     "code": "borrower = query_borrower({\"name\": inputs[\"borrower_name\"]})\n\nloans = []\nif borrower:\n    loans = query_loans({\"borrower_id\": borrower[\"borrower_id\"]}) or []\n\nall_collateral = []\nfor loan in loans:\n    collateral = query_collateral({\"loan_id\": loan[\"loan_id\"]}) or []\n    for c in collateral:\n        entry = dict(c)\n        entry[\"loan_id\"] = loan[\"loan_id\"]\n        all_collateral.append(entry)\n\ntop_collateral = None\nif all_collateral:\n    def _key(c):\n        v = c.get(\"appraised_value\")\n        if v is None:\n            return float(\"-inf\")\n        try:\n            return float(v)\n        except (TypeError, ValueError):\n            return float(\"-inf\")\n    top_collateral = max(all_collateral, key=_key)\n\nresult = {\n    \"borrower\": borrower,\n    \"loans\": loans,\n    \"all_collateral\": all_collateral,\n    \"top_collateral\": top_collateral,\n}",
     "review": "The code resolves the borrower by name from inputs, fetches all loans, collects collateral for every loan (annotating each item with its loan_id), and selects the collateral with the highest appraised_value via max with a safe numeric key that handles None or non-numeric values. The result bundles the borrower, loans, full collateral list, and the single top collateral item. It is generalized for any borrower name and gracefully returns a null top_collateral when there are no loans or no collateral."
-  },
-  {
-    "title": "Average interest rate by product type in city",
-    "spec": "Get borrowers in a city (limit 5), then get loans for each borrower. Group loans by product type and compute average interest_rate per product. Assign result as dict mapping product to avg interest rate.",
-    "host_functions": [
-      "query_borrowers_by_city",
-      "query_loans"
-    ],
-    "input_schema": {
-      "city": "City name"
-    },
-    "research": "1) OBJECTIVE: For a given city, fetch up to 5 borrowers, retrieve each borrower's loans, group loans by product type, and compute average interest_rate per product.\n2) DATA NEEDED: city (input), borrower_id per borrower, loans' product and interest_rate fields.\n3) HOST FUNCTIONS TO USE: query_borrowers_by_city({'city': ..., 'limit': 5}), query_loans({'borrower_id': ...}).\n4) EDGE CASES: no borrowers in city -> empty dict; borrower with no loans -> contributes nothing; loans missing interest_rate or product -> skip defensively; limit must be passed as 5; multiple borrowers sharing a product -> aggregated across all.",
-    "tests": "assert isinstance(result, dict)\nassert all(isinstance(k, str) for k in result.keys())\nassert all(isinstance(v, (int, float)) for v in result.values())\n_bs = query_borrowers_by_city({\"city\": inputs[\"city\"], \"limit\": 5})\n_all = []\nfor _b in _bs:\n    _all.extend(query_loans({\"borrower_id\": _b[\"borrower_id\"]}))\nfor _prod in result:\n    _rates = [l[\"interest_rate\"] for l in _all if l.get(\"product\") == _prod and l.get(\"interest_rate\") is not None]\n    assert len(_rates) > 0\n    assert abs(result[_prod] - sum(_rates) / len(_rates)) < 1e-9\nassert len(result) == len({l.get(\"product\") for l in _all if l.get(\"product\") and l.get(\"interest_rate\") is not None})",
-    "code": "borrowers = query_borrowers_by_city({\"city\": inputs[\"city\"], \"limit\": 5})\nif borrowers is None:\n    borrowers = []\n\nloans = []\nfor b in borrowers:\n    bid = b.get(\"borrower_id\") if isinstance(b, dict) else None\n    if not bid:\n        continue\n    bl = query_loans({\"borrower_id\": bid})\n    if bl:\n        loans.extend(bl)\n\ngrouped = {}\nfor loan in loans:\n    if not isinstance(loan, dict):\n        continue\n    product = loan.get(\"product\")\n    rate = loan.get(\"interest_rate\")\n    if product is None or rate is None:\n        continue\n    grouped.setdefault(product, []).append(rate)\n\nresult = {product: sum(rates) / len(rates) for product, rates in grouped.items() if rates}",
-    "review": "The code fetches up to five borrowers in the specified city, collects each borrower's loans, groups the loans by product type, and computes the average interest rate per product into a dict. It never hardcodes city values (uses inputs[\"city\"]), handles borrowers with no loans gracefully, and skips loans missing product or interest_rate, so the output correctly matches the spec."
   },
   {
     "title": "Loan disbursement trend by month",
@@ -1309,21 +1217,6 @@
     "tests": "assert isinstance(result, dict)\nassert \"borrower\" in result\nassert \"loans\" in result\nassert isinstance(result[\"borrower\"], dict)\nassert isinstance(result[\"loans\"], list)\nif result[\"loans\"]:\n    assert all(loan[\"borrower_id\"] == result[\"borrower\"][\"borrower_id\"] for loan in result[\"loans\"])",
     "code": "name = ask_user({\"prompt\": \"Please enter the borrower name:\"})\nborrower = query_borrower({\"name\": name})\nwants_loans = ask_confirm({\"prompt\": \"Would you like to see loan details for this borrower?\"})\nif wants_loans:\n    loans = query_loans({\"borrower_id\": borrower[\"borrower_id\"]})\nelse:\n    loans = []\nresult = {\"borrower\": borrower, \"loans\": loans}",
     "review": "The code asks the user for a borrower name, retrieves the borrower record, then asks for confirmation on viewing loan details. If confirmed it fetches loans using the borrower_id; otherwise it returns an empty loans list. The output is a dict with borrower and loans keys, matching the requirement, and it uses only the provided host functions with no hardcoded values."
-  },
-  {
-    "title": "Loan maturity analysis",
-    "spec": "Get borrowers in a city (limit 5), then loans. For each loan, parse disbursed_date string (YYYY-MM-DD) by splitting on '-' to get year and month as ints. Compute approximate months_elapsed = (2025 - year) * 12 + (6 - month). Compute months_remaining = tenor_months - months_elapsed. Categorize: short_term (remaining<6), medium_term (6 to 18), long_term (>18). Assign result as dict mapping category to count. Do NOT use datetime module.",
-    "host_functions": [
-      "query_borrowers_by_city",
-      "query_loans"
-    ],
-    "input_schema": {
-      "city": "City name"
-    },
-    "research": "1) OBJECTIVE: For a given city, fetch up to 5 borrowers, then fetch each borrower's loans. For every loan, parse disbursed_date \"YYYY-MM-DD\" via split('-'), compute months_elapsed from year/month, compute months_remaining = tenor_months - months_elapsed, categorize into short_term/medium_term/long_term, and return dict mapping category -> count.\n2) DATA NEEDED: borrowers list (borrower_id), loans per borrower (tenor_months, disbursed_date).\n3) HOST FUNCTIONS: query_borrowers_by_city({'city', 'limit'}), query_loans({'borrower_id'}).\n4) EDGE CASES: empty borrower list -> all counts 0 (or empty dict); invalid/missing date parts (format issues) -> skip loan safely; limit fixed at 5; categories always present for stable output.",
-    "tests": "assert isinstance(result, dict)\nassert set(result.keys()).issubset({\"short_term\", \"medium_term\", \"long_term\"})\nassert all(isinstance(v, int) for v in result.values())\nassert all(v >= 0 for v in result.values())\nassert \"short_term\" in result and \"medium_term\" in result and \"long_term\" in result",
-    "code": "borrowers = query_borrowers_by_city({\"city\": inputs[\"city\"], \"limit\": 5})\ncounts = {\"short_term\": 0, \"medium_term\": 0, \"long_term\": 0}\nfor borrower in borrowers:\n    loans = query_loans({\"borrower_id\": borrower[\"borrower_id\"]})\n    for loan in loans:\n        date_str = loan.get(\"disbursed_date\")\n        tenor = loan.get(\"tenor_months\")\n        if date_str is None or tenor is None:\n            continue\n        parts = str(date_str).split(\"-\")\n        if len(parts) < 2:\n            continue\n        try:\n            year = int(parts[0])\n            month = int(parts[1])\n        except (ValueError, TypeError):\n            continue\n        months_elapsed = (2025 - year) * 12 + (6 - month)\n        months_remaining = tenor - months_elapsed\n        if months_remaining < 6:\n            counts[\"short_term\"] += 1\n        elif months_remaining <= 18:\n            counts[\"medium_term\"] += 1\n        else:\n            counts[\"long_term\"] += 1\nresult = counts",
-    "review": "The code fetches up to five borrowers in the requested city using the city from inputs, then retrieves each borrower's loans. For each loan it parses the disbursed_date by splitting on hyphens and converts year and month to integers without using the datetime module, computes months_elapsed from mid-2025, derives months_remaining from the loan tenor, and increments the appropriate category counter. The final result is a dictionary mapping short_term, medium_term, and long_term to integer counts, with all categories always present even when empty."
   },
   {
     "title": "Find overdue loans in city above DPD threshold",
@@ -1446,21 +1339,6 @@
     "review": "The code parses the comma-separated city list from inputs, calls query_portfolio_summary for each city, and stores each result. It then iterates to find the entry with the highest avg_loan_amount, defaulting to first on ties and handling missing keys as zero. The final result contains best_city, avg_loan_amount, and the full all_cities list of dicts as required. Empty input yields None/0 with an empty list, which is a reasonable edge-case behavior."
   },
   {
-    "title": "Cross-city delinquency comparison",
-    "spec": "Given comma-separated cities. For each city get borrowers (limit 5), then loans. Count loans with dpd > 0 and total loans. Compute delinquency_rate = delinquent / total. Return list of dicts with city, delinquent_count, total_loans, delinquency_rate sorted by rate descending.",
-    "host_functions": [
-      "query_borrowers_by_city",
-      "query_loans"
-    ],
-    "input_schema": {
-      "cities": "Comma-separated city names"
-    },
-    "research": "1) OBJECTIVE: For each city (parsed from comma-separated input), fetch up to 5 borrowers, fetch their loans, count loans with dpd>0 (delinquent) and total loans, compute delinquency_rate = delinquent/total, return list of dicts sorted by rate descending.\n2) DATA NEEDED: city list, borrowers per city (limit 5), loans per borrower with dpd field.\n3) HOST FUNCTIONS TO USE: query_borrowers_by_city({'city','limit'}), query_loans({'borrower_id'}).\n4) EDGE CASES: empty/whitespace cities; no borrowers for a city; borrowers with no loans (total=0 -> rate 0); dpd missing/None interpreted as non-delinquent; case/whitespace trimming; sort ties stable.",
-    "tests": "assert isinstance(result, list)\nassert all(isinstance(r, dict) for r in result)\nassert all(set(r.keys()) == {\"city\", \"delinquent_count\", \"total_loans\", \"delinquency_rate\"} for r in result)\nassert all(isinstance(r[\"delinquent_count\"], int) and isinstance(r[\"total_loans\"], int) for r in result)\nassert all(r[\"total_loans\"] >= r[\"delinquent_count\"] for r in result)\nassert all(0.0 <= r[\"delinquency_rate\"] <= 1.0 for r in result)\nassert all((r[\"delinquency_rate\"] == 0 if r[\"total_loans\"] == 0 else abs(r[\"delinquency_rate\"] - r[\"delinquent_count\"]/r[\"total_loans\"]) < 1e-9) for r in result)\nassert all(result[i][\"delinquency_rate\"] >= result[i+1][\"delinquency_rate\"] for i in range(len(result)-1))\nassert len(result) <= len([c for c in inputs[\"cities\"].split(\",\") if c.strip()])",
-    "code": "raw = inputs.get(\"cities\", \"\") or \"\"\ncities = [c.strip() for c in raw.split(\",\") if c.strip()]\nresult = []\nseen = set()\nfor city in cities:\n    key = city.lower()\n    if key in seen:\n        continue\n    seen.add(key)\n    borrowers = query_borrowers_by_city({\"city\": city, \"limit\": 5}) or []\n    delinquent = 0\n    total = 0\n    for b in borrowers:\n        bid = b.get(\"borrower_id\")\n        if not bid:\n            continue\n        loans = query_loans({\"borrower_id\": bid}) or []\n        for ln in loans:\n            total += 1\n            dpd = ln.get(\"dpd\")\n            if dpd is not None and dpd > 0:\n                delinquent += 1\n    rate = (delinquent / total) if total > 0 else 0.0\n    result.append({\n        \"city\": city,\n        \"delinquent_count\": delinquent,\n        \"total_loans\": total,\n        \"delinquency_rate\": rate,\n    })\nresult.sort(key=lambda r: r[\"delinquency_rate\"], reverse=True)",
-    "review": "The code parses the comma-separated city list from inputs, deduplicates while trimming whitespace, fetches up to five borrowers per city via query_borrowers_by_city, retrieves each borrower's loans via query_loans, and counts total loans and those with dpd greater than zero. It computes delinquency_rate as delinquent divided by total with a safe zero when there are no loans, builds the required dict per city, and sorts the list by delinquency_rate descending. Output matches the spec, handles empty inputs and no-loan borrowers gracefully, and uses only real host-provided data with no hardcoded values."
-  },
-  {
     "title": "Collateral summary per loan",
     "spec": "Given borrower name, get borrower then loans. For each loan call query_collateral with loan_id. Return list of dicts with loan_id, loan_amount, collateral_items (count), total_collateral_value (sum of appraised_value), coverage_ratio (total_collateral / loan_amount).",
     "host_functions": [
@@ -1508,21 +1386,6 @@
     "review": "The code fetches up to five borrowers in the requested city, loops through each to obtain their guarantors, and accumulates guarantee amounts keyed by guarantor name so duplicates across borrowers are summed. It then produces a list of dictionaries with guarantor_name and total_exposure, sorted in descending order of exposure. Edge cases like empty borrower lists, missing guarantors, and absent fields are handled gracefully, and no values are hardcoded."
   },
   {
-    "title": "Total amount of active loans in city",
-    "spec": "Get borrowers in city (limit 5), loans for each. Filter to loans where status == 'active'. Sum their amounts. Return dict with city, active_loan_count, total_active_amount.",
-    "host_functions": [
-      "query_borrowers_by_city",
-      "query_loans"
-    ],
-    "input_schema": {
-      "city": "City name"
-    },
-    "research": "1) OBJECTIVE: Given a city, fetch up to 5 borrowers in that city, fetch each borrower's loans, keep only loans with status == 'active', count them and sum amounts. Return {city, active_loan_count, total_active_amount}.\n2) DATA NEEDED: borrowers list (limit 5), loans per borrower with status and amount.\n3) HOST FUNCTIONS TO USE: query_borrowers_by_city({'city': inputs['city'], 'limit': 5}), then query_loans({'borrower_id': borrower_id}) for each.\n4) EDGE CASES: no borrowers in city -> empty results, count 0, amount 0. Borrowers with no loans or no active loans. Missing 'status' or 'amount' keys. Amount may be int or float, sum starting from 0 ensures numeric type.",
-    "tests": "assert isinstance(result, dict)\nassert result[\"city\"] == inputs[\"city\"]\nassert \"active_loan_count\" in result\nassert \"total_active_amount\" in result\nassert isinstance(result[\"active_loan_count\"], int)\nassert isinstance(result[\"total_active_amount\"], (int, float))\nassert result[\"active_loan_count\"] >= 0\nassert result[\"total_active_amount\"] >= 0\nassert result[\"active_loan_count\"] == sum(1 for b in query_borrowers_by_city({\"city\": inputs[\"city\"], \"limit\": 5}) for l in query_loans({\"borrower_id\": b[\"borrower_id\"]}) if l.get(\"status\") == \"active\")\nassert result[\"total_active_amount\"] == sum(l.get(\"amount\", 0) for b in query_borrowers_by_city({\"city\": inputs[\"city\"], \"limit\": 5}) for l in query_loans({\"borrower_id\": b[\"borrower_id\"]}) if l.get(\"status\") == \"active\")",
-    "code": "city = inputs[\"city\"]\nborrowers = query_borrowers_by_city({\"city\": city, \"limit\": 5})\nactive_loan_count = 0\ntotal_active_amount = 0\n\nfor borrower in borrowers:\n    loans = query_loans({\"borrower_id\": borrower[\"borrower_id\"]})\n    for loan in loans:\n        if loan.get(\"status\") == \"active\":\n            active_loan_count += 1\n            total_active_amount += loan.get(\"amount\", 0)\n\nresult = {\n    \"city\": city,\n    \"active_loan_count\": active_loan_count,\n    \"total_active_amount\": total_active_amount,\n}",
-    "review": "The code fetches up to 5 borrowers in the requested city using the city from inputs, then retrieves loans for each borrower and filters to only those with status equal to 'active'. It counts those loans and sums their amounts, returning a dict containing the city, the active loan count, and the total active amount. It handles empty cities, borrowers without loans, and missing keys gracefully since counters start at zero, and it reads all request-specific values from inputs rather than hardcoding them."
-  },
-  {
     "title": "Average payment amount for completed payments",
     "spec": "Given borrower name, get borrower, loans, payments for each loan. Filter payments where status == 'completed'. Compute average amount of completed payments. Return dict with total_completed, avg_amount.",
     "host_functions": [
@@ -1554,21 +1417,6 @@
     "tests": "assert isinstance(result, list)\nfor item in result:\n    assert isinstance(item, dict)\n    assert \"loan_id\" in item and \"dpd\" in item and \"amount\" in item\n    assert \"collateral_value\" in item and \"coverage_ratio\" in item\n    assert int(item[\"dpd\"]) > int(inputs[\"min_dpd\"])\n    assert item[\"coverage_ratio\"] == item[\"collateral_value\"] / item[\"amount\"] if item[\"amount\"] else item[\"coverage_ratio\"] == 0.0",
     "code": "limit = 5\nmin_dpd = int(inputs[\"min_dpd\"])\n\nborrowers = query_borrowers_by_city({\"city\": inputs[\"city\"], \"limit\": limit})\nif borrowers is None:\n    borrowers = []\n\nresult = []\n\ndef _safe_loan_amount(loan):\n    try:\n        return float(loan.get(\"amount\", 0) or 0)\n    except Exception:\n        return 0.0\n\ndef _safe_dpd(loan):\n    try:\n        return int(loan.get(\"dpd\", 0) or 0)\n    except Exception:\n        return 0\n\ndef _sum_collateral(loan_id):\n    colls = query_collateral({\"loan_id\": loan_id})\n    if colls is None:\n        colls = []\n    total = 0.0\n    for c in colls:\n        try:\n            total += float(c.get(\"appraised_value\", 0) or 0)\n        except Exception:\n            pass\n    return total\n\nfor borrower in borrowers:\n    borrower_id = borrower.get(\"borrower_id\")\n    if not borrower_id:\n        continue\n    loans = query_loans({\"borrower_id\": borrower_id})\n    if loans is None:\n        loans = []\n    for loan in loans:\n        dpd = _safe_dpd(loan)\n        if dpd <= min_dpd:\n            continue\n        amount = _safe_loan_amount(loan)\n        collateral_value = _sum_collateral(loan.get(\"loan_id\"))\n        if amount > 0:\n            coverage_ratio = collateral_value / amount\n        else:\n            coverage_ratio = 0.0\n        result.append({\n            \"loan_id\": loan.get(\"loan_id\"),\n            \"dpd\": dpd,\n            \"amount\": amount,\n            \"collateral_value\": collateral_value,\n            \"coverage_ratio\": coverage_ratio,\n        })",
     "review": "The code fetches up to five borrowers in the specified city, retrieves each borrower's loans, filters to those whose dpd strictly exceeds the min_dpd input, and looks up collateral for each qualifying loan. It computes the coverage ratio as the sum of appraised collateral values divided by the loan amount (guarding against zero amounts) and returns a list of dictionaries containing loan_id, dpd, amount, collateral_value, and coverage_ratio. All request-specific values come from the inputs dict, host functions are called directly without redefinition, and no mock data is created, so the output matches the requirement."
-  },
-  {
-    "title": "Restructured loans total by city",
-    "spec": "Given comma-separated cities. For each city get borrowers (limit 5), then loans. Filter loans where status == 'restructured'. Sum amounts. Return dict mapping city to dict with count and total_amount.",
-    "host_functions": [
-      "query_borrowers_by_city",
-      "query_loans"
-    ],
-    "input_schema": {
-      "cities": "Comma-separated city names"
-    },
-    "research": "1) OBJECTIVE: Parse comma-separated cities; for each city fetch up to 5 borrowers; for each borrower fetch loans; filter loans with status == 'restructured'; return dict mapping each city to {'count': n_restructured_loans, 'total_amount': sum of amounts}.\n2) DATA NEEDED: cities list from inputs; borrowers per city (limit 5); loans per borrower with status and amount fields.\n3) HOST FUNCTIONS TO USE: query_borrowers_by_city({'city':..., 'limit':5}); query_loans({'borrower_id':...}).\n4) EDGE CASES: whitespace around city names; empty cities; empty borrower list; no loans; missing status/amount keys; duplicate borrower ids across cities (process per city independently); case of status comparisons (exact match 'restructured').",
-    "tests": "assert isinstance(result, dict)\nassert set(result.keys()) == set(c.strip() for c in inputs[\"cities\"].split(\",\") if c.strip())\nfor city, data in result.items():\n    assert isinstance(data, dict)\n    assert \"count\" in data and \"total_amount\" in data\n    assert isinstance(data[\"count\"], int) and data[\"count\"] >= 0\n    assert isinstance(data[\"total_amount\"], (int, float)) and data[\"total_amount\"] >= 0",
-    "code": "cities_raw = inputs.get(\"cities\", \"\") or \"\"\ncity_list = [c.strip() for c in cities_raw.split(\",\") if c.strip()]\n\nresult = {}\nfor city in city_list:\n    borrowers = query_borrowers_by_city({\"city\": city, \"limit\": 5}) or []\n    count = 0\n    total = 0\n    seen_borrowers = set()\n    for b in borrowers:\n        bid = b.get(\"borrower_id\") if isinstance(b, dict) else None\n        if bid is None or bid in seen_borrowers:\n            continue\n        seen_borrowers.add(bid)\n        loans = query_loans({\"borrower_id\": bid}) or []\n        for loan in loans:\n            if not isinstance(loan, dict):\n                continue\n            if loan.get(\"status\") == \"restructured\":\n                amt = loan.get(\"amount\", 0) or 0\n                count += 1\n                total += amt\n    result[city] = {\"count\": count, \"total_amount\": total}\n\nresult = result",
-    "review": "The code reads the comma-separated cities from inputs, trims whitespace, and for each city queries up to 5 borrowers via the host function, then queries loans for each unique borrower and filters those with status equal to 'restructured'. It aggregates the count and sum of amounts into a dict keyed by city, matching the spec. Edge cases like empty city strings, missing borrowers, and non-dict loans are handled defensively, and no values are hardcoded. The output is a dict of city to {count, total_amount} as required."
   },
   {
     "title": "Rank cities by total loan volume",
@@ -1631,5 +1479,163 @@
     "tests": "assert isinstance(result, dict)\nassert \"guarantors\" in result\nassert \"city\" in result\nassert result[\"city\"] == inputs[\"city\"]\nassert isinstance(result[\"guarantors\"], list)\nassert len(result[\"guarantors\"]) <= inputs[\"top_n\"]\nfor g in result[\"guarantors\"]:\n    assert \"name\" in g\n    assert \"avg_guarantee_amount\" in g\n    assert \"count\" in g\n    assert isinstance(g[\"avg_guarantee_amount\"], (int, float))\n    assert g[\"count\"] >= 1\namounts = [g[\"avg_guarantee_amount\"] for g in result[\"guarantors\"]]\nassert amounts == sorted(amounts, reverse=True)\nassert \"total_borrowers_fetched\" in result\nassert isinstance(result[\"total_borrowers_fetched\"], int)\nassert result[\"total_borrowers_fetched\"] <= 5",
     "code": "borrowers = query_borrowers_by_city({\"city\": inputs[\"city\"], \"limit\": 5})\nif not borrowers:\n    borrowers = []\n\ngrouped = {}\nfor borrower in borrowers:\n    borrower_id = borrower.get(\"borrower_id\")\n    if borrower_id is None:\n        continue\n    guarantors = query_guarantors({\"borrower_id\": borrower_id})\n    if not guarantors:\n        continue\n    for g in guarantors:\n        name = g.get(\"name\")\n        amount = g.get(\"guarantee_amount\", 0)\n        if name is None:\n            continue\n        if amount is None:\n            amount = 0\n        if name not in grouped:\n            grouped[name] = {\"total\": 0, \"count\": 0}\n        grouped[name][\"total\"] += amount\n        grouped[name][\"count\"] += 1\n\nguarantor_list = []\nfor name, info in grouped.items():\n    count = info[\"count\"]\n    if count == 0:\n        continue\n    avg_amount = info[\"total\"] / count\n    guarantor_list.append({\n        \"name\": name,\n        \"avg_guarantee_amount\": avg_amount,\n        \"total_guarantee_amount\": info[\"total\"],\n        \"count\": count\n    })\n\nguarantor_list.sort(key=lambda x: (-x[\"avg_guarantee_amount\"], x[\"name\"]))\n\ntop_n = inputs[\"top_n\"]\nif top_n is None or top_n < 0:\n    top_n = 0\ntop_guarantors = guarantor_list[:top_n]\n\nresult = {\n    \"city\": inputs[\"city\"],\n    \"top_n\": top_n,\n    \"total_borrowers_fetched\": len(borrowers),\n    \"total_unique_guarantors\": len(guarantor_list),\n    \"guarantors\": top_guarantors\n}",
     "review": "The code retrieves up to 5 borrowers from the requested city via the host function, then queries guarantors for each borrower individually. It aggregates guarantor records by name across all borrowers, summing guarantee amounts and counting occurrences, then computes the average guarantee amount per unique guarantor name. Results are sorted by average amount descending (with a name tiebreaker) and truncated to the requested top_n. The output includes the city, count of borrowers fetched, total unique guarantor count, and the list of top guarantors with their name, average guarantee amount, total amount, and occurrence count. Edge cases like no borrowers, no guarantors, null values, and oversized top_n are handled without mock data or hardcoded values."
+  },
+  {
+    "title": "Total late fees by payment method across borrowers",
+    "spec": "Get borrowers in city. For each borrower get loans. For each loan get payments. Sum late_fee grouped by payment method. Return dict of method to total late fees.",
+    "host_functions": [
+      "query_borrowers_by_city",
+      "query_loans",
+      "query_payments"
+    ],
+    "input_schema": {
+      "city": "City name"
+    },
+    "research": "1) OBJECTIVE: 3-level chain: city -> borrowers -> loans -> payments. Group payments by method and sum late_fee.\n2) HOST FUNCTIONS: query_borrowers_by_city returns borrower_id, query_loans needs borrower_id returns loan_id, query_payments needs loan_id returns method + late_fee.\n3) APPROACH: Nested loops. Outer loop over borrowers, inner over loans, innermost over payments. Accumulate into dict by method.",
+    "tests": "assert isinstance(result, dict)\nassert len(result) > 0\nassert all(isinstance(v, (int, float)) for v in result.values())\nassert all(isinstance(k, str) for k in result.keys())",
+    "code": "borrowers = query_borrowers_by_city({\"city\": inputs[\"city\"]})\n\nlate_fees_by_method = {}\nfor borrower in borrowers:\n    bid = borrower.get(\"borrower_id\")\n    if bid is None:\n        continue\n    loans = query_loans({\"borrower_id\": bid})\n    for loan in loans:\n        lid = loan.get(\"loan_id\")\n        if lid is None:\n            continue\n        payments = query_payments({\"loan_id\": lid})\n        for payment in payments:\n            method = payment.get(\"method\", \"unknown\")\n            fee = payment.get(\"late_fee\") or 0\n            late_fees_by_method[method] = late_fees_by_method.get(method, 0) + fee\n\nresult = late_fees_by_method",
+    "review": "Code chains three host functions correctly: borrowers -> loans -> payments. Groups late fees by payment method with proper None guards."
+  },
+  {
+    "title": "Guarantor total exposure from borrower loans",
+    "spec": "Given borrower name, get guarantors. For each guarantor, the guarantee covers borrower's loans. Sum loan amounts as each guarantor's exposure. Return list of guarantors with name and exposure.",
+    "host_functions": [
+      "query_borrower",
+      "query_loans",
+      "query_guarantors"
+    ],
+    "input_schema": {
+      "borrower_name": "Name of borrower"
+    },
+    "research": "1) OBJECTIVE: Get borrower, then guarantors AND loans. Each guarantor's exposure = sum of loan amounts they guarantee.\n2) HOST FUNCTIONS: query_borrower returns borrower_id. query_guarantors needs borrower_id. query_loans needs borrower_id.\n3) APPROACH: Get borrower_id, fetch guarantors and loans separately. Total loan amount is each guarantor's exposure (simplified: all guarantors cover all loans).",
+    "tests": "assert isinstance(result, list)\nassert all(isinstance(g, dict) for g in result)\nassert all('name' in g and 'exposure' in g for g in result)",
+    "code": "borrower = query_borrower({\"name\": inputs[\"borrower_name\"]})\nbid = borrower[\"borrower_id\"]\n\nguarantors = query_guarantors({\"borrower_id\": bid})\nloans = query_loans({\"borrower_id\": bid})\n\ntotal_loan_amount = sum(loan.get(\"amount\", 0) for loan in loans)\n\nresult = [\n    {\n        \"name\": g.get(\"name\", \"unknown\"),\n        \"relationship\": g.get(\"relationship\", \"unknown\"),\n        \"guarantee_amount\": g.get(\"guarantee_amount\", 0),\n        \"exposure\": total_loan_amount,\n    }\n    for g in guarantors\n]",
+    "review": "Code fetches borrower, then both guarantors and loans. Each guarantor's exposure is total loan amount. Clean pattern."
+  },
+  {
+    "title": "Collateral value statistics across city loans",
+    "spec": "Get borrowers in city. For each get loans, for each loan get collateral. Collect all appraised_value. Use compute_statistics to get stats. Return statistics dict.",
+    "host_functions": [
+      "query_borrowers_by_city",
+      "query_loans",
+      "query_collateral",
+      "compute_statistics"
+    ],
+    "input_schema": {
+      "city": "City name"
+    },
+    "research": "1) OBJECTIVE: Chain: city -> borrowers -> loans -> collateral -> collect values -> statistics.\n2) HOST FUNCTIONS: query_borrowers_by_city returns list with borrower_id. query_loans needs borrower_id returns loan_id. query_collateral needs loan_id returns appraised_value. compute_statistics takes list of floats.\n3) APPROACH: Triple nested loop to collect all appraised_value, then call compute_statistics.",
+    "tests": "assert isinstance(result, dict)\nassert 'mean' in result\nassert 'median' in result\nassert 'count' in result\nassert result['count'] >= 0",
+    "code": "borrowers = query_borrowers_by_city({\"city\": inputs[\"city\"]})\n\nall_values = []\nfor borrower in borrowers:\n    bid = borrower.get(\"borrower_id\")\n    if bid is None:\n        continue\n    loans = query_loans({\"borrower_id\": bid})\n    for loan in loans:\n        lid = loan.get(\"loan_id\")\n        if lid is None:\n            continue\n        collaterals = query_collateral({\"loan_id\": lid})\n        for col in collaterals:\n            val = col.get(\"appraised_value\")\n            if val is not None:\n                all_values.append(val)\n\nif all_values:\n    result = compute_statistics({\"values\": all_values})\nelse:\n    result = {\"count\": 0, \"mean\": 0, \"median\": 0, \"std\": 0, \"min\": 0, \"max\": 0}",
+    "review": "Chains 4 functions: borrowers -> loans -> collateral -> statistics. Handles empty values gracefully."
+  },
+  {
+    "title": "Transaction volume by channel and type",
+    "spec": "Given borrower name, get transactions. Use aggregate_data to group by channel, computing sum of amount and count. Return aggregated result.",
+    "host_functions": [
+      "query_borrower",
+      "query_transactions",
+      "aggregate_data"
+    ],
+    "input_schema": {
+      "borrower_name": "Name of borrower"
+    },
+    "research": "1) OBJECTIVE: Get borrower transactions, then use aggregate_data to group by channel.\n2) HOST FUNCTIONS: query_borrower returns borrower_id. query_transactions needs borrower_id. aggregate_data takes records + group_by + aggregations.\n3) APPROACH: Fetch transactions, pass to aggregate_data with group_by='channel'.",
+    "tests": "assert isinstance(result, list)\nassert all(isinstance(r, dict) for r in result)\nassert all('channel' in r for r in result)",
+    "code": "borrower = query_borrower({\"name\": inputs[\"borrower_name\"]})\nbid = borrower[\"borrower_id\"]\n\ntransactions = query_transactions({\"borrower_id\": bid})\n\nresult = aggregate_data({\n    \"records\": transactions,\n    \"group_by\": \"channel\",\n    \"aggregations\": {\"amount\": \"sum\"}\n})",
+    "review": "Clean two-step chain: get transactions then aggregate with library bridge function."
+  },
+  {
+    "title": "Sorted delinquency report with selected columns",
+    "spec": "Get all delinquency stats. Use tabulate_data to sort by total_outstanding descending and select bucket + loan_count + total_outstanding columns.",
+    "host_functions": [
+      "query_delinquency_stats",
+      "tabulate_data"
+    ],
+    "input_schema": {},
+    "research": "1) OBJECTIVE: Fetch delinquency stats, reformat with tabulate_data.\n2) HOST FUNCTIONS: query_delinquency_stats returns list of dicts. tabulate_data sorts/filters/selects columns.\n3) APPROACH: Fetch stats, pass to tabulate_data.",
+    "tests": "assert isinstance(result, list)\nassert all('bucket' in r for r in result)\nassert all('total_outstanding' in r for r in result)",
+    "code": "stats = query_delinquency_stats({})\n\nresult = tabulate_data({\n    \"records\": stats,\n    \"columns\": [\"bucket\", \"loan_count\", \"total_outstanding\"],\n    \"sort_by\": \"total_outstanding\",\n    \"ascending\": False\n})",
+    "review": "Simple chain: fetch stats then format with tabulate_data. Clean use of library bridge."
+  },
+  {
+    "title": "Guarantor relationship network for city borrowers",
+    "spec": "Get borrowers in city. For each get guarantors. Build edge list (borrower_name, guarantor_name). Use find_related_entities to find all entities connected to a specific borrower within depth 2.",
+    "host_functions": [
+      "query_borrowers_by_city",
+      "query_guarantors",
+      "find_related_entities"
+    ],
+    "input_schema": {
+      "city": "City name",
+      "target_borrower": "Name of borrower to find connections for"
+    },
+    "research": "1) OBJECTIVE: Build borrower-guarantor graph, find connections for one borrower.\n2) HOST FUNCTIONS: query_borrowers_by_city returns list with borrower_id + name. query_guarantors needs borrower_id returns guarantor name. find_related_entities takes edges + entity_id.\n3) APPROACH: Loop borrowers, get guarantors, build edges. Then query network.",
+    "tests": "assert isinstance(result, dict)\nassert 'entity_id' in result\nassert 'related' in result",
+    "code": "borrowers = query_borrowers_by_city({\"city\": inputs[\"city\"]})\n\nedges = []\nfor borrower in borrowers:\n    bid = borrower.get(\"borrower_id\")\n    bname = borrower.get(\"name\", \"\")\n    if bid is None:\n        continue\n    guarantors = query_guarantors({\"borrower_id\": bid})\n    for g in guarantors:\n        gname = g.get(\"name\", \"\")\n        if gname:\n            edges.append([bname, gname])\n\nresult = find_related_entities({\n    \"edges\": edges,\n    \"entity_id\": inputs[\"target_borrower\"],\n    \"depth\": 2\n})",
+    "review": "Three-step chain: borrowers -> guarantors -> network analysis. Builds edge list from domain data, then uses library bridge."
+  },
+  {
+    "title": "Collateral type pivot by loan product",
+    "spec": "Given borrower name, get loans and collateral for each. Build records with product and collateral type and value. Use pivot_data to create pivot table of collateral value by product vs type.",
+    "host_functions": [
+      "query_borrower",
+      "query_loans",
+      "query_collateral",
+      "pivot_data"
+    ],
+    "input_schema": {
+      "borrower_name": "Name of borrower"
+    },
+    "research": "1) OBJECTIVE: Get borrower's loans and collateral, pivot by product type.\n2) HOST FUNCTIONS: query_borrower returns borrower_id. query_loans needs borrower_id returns product + loan_id. query_collateral needs loan_id returns type + appraised_value. pivot_data creates pivot table.\n3) APPROACH: Nested loop to build flat records, then pivot.",
+    "tests": "assert isinstance(result, dict)\nassert 'columns' in result\nassert 'index' in result\nassert 'values' in result",
+    "code": "borrower = query_borrower({\"name\": inputs[\"borrower_name\"]})\nbid = borrower[\"borrower_id\"]\n\nloans = query_loans({\"borrower_id\": bid})\n\nrecords = []\nfor loan in loans:\n    lid = loan.get(\"loan_id\")\n    product = loan.get(\"product\", \"unknown\")\n    if lid is None:\n        continue\n    collaterals = query_collateral({\"loan_id\": lid})\n    for col in collaterals:\n        records.append({\n            \"product\": product,\n            \"collateral_type\": col.get(\"type\", \"unknown\"),\n            \"value\": col.get(\"appraised_value\", 0),\n        })\n\nif records:\n    result = pivot_data({\n        \"records\": records,\n        \"index\": \"product\",\n        \"columns\": \"collateral_type\",\n        \"values\": \"value\",\n        \"aggfunc\": \"sum\"\n    })\nelse:\n    result = {\"columns\": [], \"index\": [], \"values\": []}",
+    "review": "Three-level chain with pivot: borrower -> loans -> collateral -> pivot table. Good use of library bridge for cross-tabulation."
+  },
+  {
+    "title": "Correlation between NPL ratio and average loan amount across cities",
+    "spec": "Get portfolio summary for multiple cities. Extract npl_ratio and avg_loan_amount for each. Compute correlation between these two metrics.",
+    "host_functions": [
+      "query_portfolio_summary",
+      "compute_correlation"
+    ],
+    "input_schema": {
+      "cities": "Comma-separated city names"
+    },
+    "research": "1) OBJECTIVE: Check if NPL ratio correlates with avg loan amount.\n2) HOST FUNCTIONS: query_portfolio_summary returns npl_ratio and avg_loan_amount. compute_correlation takes x_values and y_values.\n3) APPROACH: Loop cities, collect pairs, compute correlation.",
+    "tests": "assert isinstance(result, dict)\nassert 'pearson' in result\nassert 'cities_analyzed' in result",
+    "code": "city_list = [c.strip() for c in inputs[\"cities\"].split(\",\") if c.strip()]\n\nnpl_values = []\nloan_values = []\nfor city in city_list:\n    summary = query_portfolio_summary({\"city\": city})\n    npl = summary.get(\"npl_ratio\")\n    avg_loan = summary.get(\"avg_loan_amount\")\n    if npl is not None and avg_loan is not None:\n        npl_values.append(npl)\n        loan_values.append(avg_loan)\n\nif len(npl_values) >= 2:\n    corr = compute_correlation({\"x_values\": npl_values, \"y_values\": loan_values})\n    result = {**corr, \"cities_analyzed\": len(npl_values)}\nelse:\n    result = {\"pearson\": 0, \"spearman\": 0, \"p_value\": 1.0, \"n\": len(npl_values), \"cities_analyzed\": len(npl_values)}",
+    "review": "Two-step chain: portfolio summaries per city -> correlation analysis. Handles edge case of insufficient data points."
+  },
+  {
+    "title": "Payment method breakdown for loan with collection history",
+    "spec": "Get full loan details (includes payments and collection records). Use aggregate_data to group payments by method and sum amounts. Return both payment breakdown and collection summary.",
+    "host_functions": [
+      "query_loan_details",
+      "aggregate_data"
+    ],
+    "input_schema": {
+      "loan_id": "Loan ID"
+    },
+    "research": "1) OBJECTIVE: Deep dive into one loan: payment breakdown + collection summary.\n2) HOST FUNCTIONS: query_loan_details returns loan + payments + collateral + collection_records. aggregate_data groups records.\n3) APPROACH: Get full details, aggregate payments by method.",
+    "tests": "assert isinstance(result, dict)\nassert 'payment_breakdown' in result\nassert 'collection_count' in result\nassert 'loan_status' in result",
+    "code": "details = query_loan_details({\"loan_id\": inputs[\"loan_id\"]})\n\nloan = details.get(\"loan\", {})\npayments = details.get(\"payments\", [])\ncollections = details.get(\"collection_records\", [])\n\nif payments:\n    breakdown = aggregate_data({\n        \"records\": payments,\n        \"group_by\": \"method\",\n        \"aggregations\": {\"amount\": \"sum\"}\n    })\nelse:\n    breakdown = []\n\nresult = {\n    \"loan_status\": loan.get(\"status\", \"unknown\"),\n    \"loan_amount\": loan.get(\"amount\", 0),\n    \"payment_breakdown\": breakdown,\n    \"collection_count\": len(collections),\n    \"last_collection\": collections[-1] if collections else None,\n}",
+    "review": "Two-step: get full loan details then aggregate payments. Combines domain function output with library bridge."
+  },
+  {
+    "title": "Collection action effectiveness rate by action type",
+    "spec": "Get borrowers in city. For each get loans with DPD > 0. For delinquent loans get collection records. Group by action_type and compute success rate (outcome=paid_in_full or partial_payment vs total). Return effectiveness per action type.",
+    "host_functions": [
+      "query_borrowers_by_city",
+      "query_loans",
+      "query_collection_records"
+    ],
+    "input_schema": {
+      "city": "City name"
+    },
+    "research": "1) OBJECTIVE: Measure which collection actions work best.\n2) HOST FUNCTIONS: query_borrowers_by_city returns borrower_id. query_loans returns DPD + loan_id. query_collection_records returns action_type + outcome.\n3) APPROACH: Filter delinquent loans, collect records, group by action_type, compute success rate.",
+    "tests": "assert isinstance(result, dict)\nassert all(isinstance(v, dict) for v in result.values())\nassert all('success_rate' in v for v in result.values())",
+    "code": "borrowers = query_borrowers_by_city({\"city\": inputs[\"city\"]})\n\naction_stats = {}\nfor borrower in borrowers:\n    bid = borrower.get(\"borrower_id\")\n    if bid is None:\n        continue\n    loans = query_loans({\"borrower_id\": bid})\n    for loan in loans:\n        dpd = loan.get(\"dpd\", 0)\n        if dpd <= 0:\n            continue\n        lid = loan.get(\"loan_id\")\n        if lid is None:\n            continue\n        records = query_collection_records({\"loan_id\": lid})\n        for record in records:\n            action = record.get(\"action_type\", \"unknown\")\n            outcome = record.get(\"outcome\", \"\")\n            if action not in action_stats:\n                action_stats[action] = {\"total\": 0, \"success\": 0}\n            action_stats[action][\"total\"] += 1\n            if outcome in (\"paid_in_full\", \"partial_payment\", \"promise_to_pay\"):\n                action_stats[action][\"success\"] += 1\n\nresult = {}\nfor action, stats in action_stats.items():\n    total = stats[\"total\"]\n    success = stats[\"success\"]\n    result[action] = {\n        \"total\": total,\n        \"success\": success,\n        \"success_rate\": round(success / total, 2) if total > 0 else 0,\n    }",
+    "review": "Three-level chain with filtering and aggregation: borrowers -> delinquent loans -> collection records -> effectiveness stats."
   }
 ]
