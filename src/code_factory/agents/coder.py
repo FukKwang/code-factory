@@ -22,6 +22,9 @@ Example (inputs = {"borrower_name": "ABC"}):
 ALLOWED: def, lambda, dataclass(eq/frozen only), comprehensions, try/except, loops, f-strings, with.
 IMPORTS: json, math, datetime, re, collections, itertools, functools, dataclasses, typing.
 NOT ALLOWED: inheritance, yield, del, eval/exec, third-party imports, redefining host functions.
+NOT ALLOWED in sandbox: date.today(), datetime.now(), time.time() — use inputs["today"] if date needed.
+
+DATA FLOW: Host functions are chained. To get loans across borrowers, first get borrower list (query_borrowers_by_city or query_portfolio_summary), then query_loans for each borrower_id. Never pass None to host functions.
 Return ONLY Python code. No markdown, no explanations, no comments."""
 
 
@@ -31,7 +34,7 @@ def build_coder(settings: Settings | None = None) -> Agent:
     return Agent(
         resolve_model(settings.model_coder, settings),
         output_type=str,
-        model_settings=ModelSettings(max_tokens=settings.max_tokens),
+        model_settings=ModelSettings(max_tokens=min(settings.max_tokens, 2048)),
         instructions=MONTY_LIMITATIONS,
         name="coder",
     )

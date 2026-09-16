@@ -4,3 +4,5 @@ __pycache__/
 *.egg-info/
 dist/
 .env
+models/
+unsloth_compiled_cache/

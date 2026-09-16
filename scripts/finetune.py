@@ -46,10 +46,14 @@ def format_for_training(examples, tokenizer):
     """Convert chat messages to tokenized format using Unsloth's chat template."""
     texts = []
     for ex in examples:
+        kwargs = {}
+        if "tools" in ex:
+            kwargs["tools"] = ex["tools"]
         text = tokenizer.apply_chat_template(
             ex["messages"],
             tokenize=False,
             add_generation_prompt=False,
+            **kwargs,
         )
         texts.append(text)
     return texts

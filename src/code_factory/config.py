@@ -8,7 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 PROVIDER_PRESETS: dict[str, dict] = {
     "ling": {
         "model": "openai-chat:ling-3.0-tiny",
-        "max_tokens": 32768,
+        "max_tokens": 4096,
         "context_window": 8192,
         "single_agent": False,
     },

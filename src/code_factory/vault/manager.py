@@ -129,7 +129,7 @@ class VaultManager:
             common = q_words & text_words
             keyword_ratio = len(common) / max(len(q_words), 1)
             score = max(seq_ratio, keyword_ratio)
-            if score > 0.2:
+            if score > 0.45:
                 scored.append((score, e))
         scored.sort(key=lambda x: x[0], reverse=True)
         return [e for _, e in scored[:top_n]]

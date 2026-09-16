@@ -12,7 +12,7 @@ def build_researcher(settings: "Settings | None" = None) -> Agent:
     return Agent(
         resolve_model(settings.model_researcher, settings),
         output_type=str,
-        model_settings=ModelSettings(max_tokens=settings.max_tokens),
+        model_settings=ModelSettings(max_tokens=min(settings.max_tokens, 2048)),
         instructions=f"""You analyze requirements for a coding task.
 
 Given a user requirement, produce a structured findings document:

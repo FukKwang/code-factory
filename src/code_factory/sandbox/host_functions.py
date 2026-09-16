@@ -581,7 +581,7 @@ HOST_FUNCTION_DESCRIPTIONS: dict[str, str] = {
     "query_collection_records": "query_collection_records({'loan_id': str}) -> list: record_id, loan_id, action_date, action_type, outcome, agent, notes, next_action_date",
     "query_transactions": "query_transactions({'borrower_id': str, 'limit': int=20}) -> list: transaction_id, borrower_id, date, type, amount, channel, reference, loan_id",
     # Aggregations
-    "query_portfolio_summary": "query_portfolio_summary({'city': str|None}) -> dict: total_borrowers, total_loans, total_outstanding, avg_loan_amount, npl_ratio, dpd buckets",
+    "query_portfolio_summary": "query_portfolio_summary({'city': str|None}) -> dict: scope(str), total_borrowers(int), total_loans(int), total_outstanding(int), total_disbursed(int), avg_loan_amount(int), avg_interest_rate(float), npl_ratio(float), current_ratio(float), dpd_30_ratio(float), dpd_60_ratio(float), dpd_90_ratio(float). Pass city=None for all.",
     "query_delinquency_stats": "query_delinquency_stats({'bucket': str|None}) -> list by DPD bucket: loan_count, total_outstanding, avg_dpd, recovery_rate. Buckets: current, 1-30, 31-60, 61-90, 91-120, 120+",
     # Library bridges
     "tabulate_data": "tabulate_data({'records': list[dict], 'columns': list[str]|None, 'sort_by': str|None, 'ascending': bool=True}) -> sorted/filtered records via pandas",

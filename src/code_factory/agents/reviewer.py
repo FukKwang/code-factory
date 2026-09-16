@@ -10,7 +10,7 @@ def build_reviewer(settings: Settings | None = None) -> Agent:
     return Agent(
         resolve_model(settings.model_reviewer, settings),
         output_type=str,
-        model_settings=ModelSettings(max_tokens=settings.max_tokens),
+        model_settings=ModelSettings(max_tokens=min(settings.max_tokens, 1024)),
         instructions="""\
 Review code execution results. Given:
 - Original requirement
