@@ -106,6 +106,7 @@ class Settings(BaseSettings):
 
 
 CUSTOM_PROVIDERS = {
+    "openai-chat": ("openai_base_url", "openai_api_key"),
     "deepseek": ("deepseek_base_url", "deepseek_api_key"),
     "qwen": ("qwen_base_url", "qwen_api_key"),
 }
