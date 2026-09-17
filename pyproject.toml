@@ -3,7 +3,7 @@ name = "code-factory"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    "pydantic-ai[openai]",
+    "pydantic-ai",
     "pydantic-monty",
     "pydantic-settings",
     "pyyaml",
