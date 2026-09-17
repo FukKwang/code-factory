@@ -63,6 +63,16 @@ See README.md for full examples.
 - Scripts (gitignored): `scripts/`
 - CI: `.github/workflows/build.yml`
 
+## Code Navigation
+
+Prefer LSP tool over grep/bash for Python code navigation:
+- **Definitions**: `goToDefinition` instead of grep
+- **References**: `findReferences` instead of grep
+- **Symbols**: `workspaceSymbol` / `documentSymbol` instead of grep or find
+- **Type info**: `hover` instead of reading source
+
+Fall back to grep only for string literals, config values, or when LSP returns no results.
+
 ## Sensitive
 
 - `.env` contains API keys — never commit
