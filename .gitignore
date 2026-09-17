@@ -6,3 +6,5 @@ dist/
 .env
 models/
 unsloth_compiled_cache/
+training_data/
+scripts/
