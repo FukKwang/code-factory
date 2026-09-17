@@ -4,6 +4,14 @@ from typing import Any, Callable
 from faker import Faker
 from pydantic import BaseModel
 
+from .registry import (
+    build_external_lookup,
+    get_descriptions,
+    get_functions,
+    get_human_input_functions,
+    register_host_function,
+)
+
 fake = Faker("id_ID")
 Faker.seed(42)
 
@@ -19,7 +27,6 @@ def _seed_for(key: str) -> int:
 
 
 def _seeded(key: str):
-    """Context-like helper: seed Faker deterministically for a key."""
     Faker.seed(_seed_for(key))
 
 
@@ -140,6 +147,10 @@ class AskChoiceArgs(BaseModel):
 # Domain functions — interconnected via borrower_id / loan_id
 # ---------------------------------------------------------------------------
 
+@register_host_function(
+    "query_borrower",
+    "query_borrower({'name': str}) -> dict: borrower_id, name, address, city, phone, email, credit_score, monthly_income, employment_status",
+)
 def query_borrower(args_dict: dict[str, Any]) -> dict[str, Any]:
     args = QueryBorrowerArgs.model_validate(args_dict)
     cache_key = f"borrower:{args.name.lower()}"
@@ -164,6 +175,10 @@ def query_borrower(args_dict: dict[str, Any]) -> dict[str, Any]:
     return borrower
 
 
+@register_host_function(
+    "query_loans",
+    "query_loans({'borrower_id': str}) -> list of loans: loan_id, borrower_id, product, amount, tenor_months, interest_rate, status, dpd, disbursed_date",
+)
 def query_loans(args_dict: dict[str, Any]) -> list[dict[str, Any]]:
     args = QueryLoansArgs.model_validate(args_dict)
     cache_key = f"loans:{args.borrower_id}"
@@ -192,6 +207,10 @@ def query_loans(args_dict: dict[str, Any]) -> list[dict[str, Any]]:
     return loans
 
 
+@register_host_function(
+    "query_borrowers_by_city",
+    "query_borrowers_by_city({'city': str, 'limit': int=10}) -> list: borrower_id, name, city, credit_score, monthly_income, total_loans, total_outstanding",
+)
 def query_borrowers_by_city(args_dict: dict[str, Any]) -> list[dict[str, Any]]:
     args = QueryBorrowersByCityArgs.model_validate(args_dict)
     _seeded(f"city:{args.city.lower()}")
@@ -209,6 +228,10 @@ def query_borrowers_by_city(args_dict: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+@register_host_function(
+    "query_loan_details",
+    "query_loan_details({'loan_id': str}) -> dict: loan info + payments + collateral + collection_records for a single loan",
+)
 def query_loan_details(args_dict: dict[str, Any]) -> dict[str, Any]:
     args = QueryLoanDetailsArgs.model_validate(args_dict)
     loan = _registry.get(f"loan_by_id:{args.loan_id}")
@@ -236,6 +259,10 @@ def query_loan_details(args_dict: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@register_host_function(
+    "query_payments",
+    "query_payments({'loan_id': str}) -> list: payment_id, loan_id, amount, payment_date, method, status, late_fee",
+)
 def query_payments(args_dict: dict[str, Any]) -> list[dict[str, Any]]:
     args = QueryPaymentsArgs.model_validate(args_dict)
     cache_key = f"payments:{args.loan_id}"
@@ -259,6 +286,10 @@ def query_payments(args_dict: dict[str, Any]) -> list[dict[str, Any]]:
     return payments
 
 
+@register_host_function(
+    "query_collateral",
+    "query_collateral({'loan_id': str}) -> list: collateral_id, loan_id, type, description, appraised_value, appraisal_date, status",
+)
 def query_collateral(args_dict: dict[str, Any]) -> list[dict[str, Any]]:
     args = QueryCollateralArgs.model_validate(args_dict)
     cache_key = f"collateral:{args.loan_id}"
@@ -282,6 +313,10 @@ def query_collateral(args_dict: dict[str, Any]) -> list[dict[str, Any]]:
     return items
 
 
+@register_host_function(
+    "query_guarantors",
+    "query_guarantors({'borrower_id': str}) -> list: guarantor_id, borrower_id, name, relationship, phone, monthly_income, guarantee_amount",
+)
 def query_guarantors(args_dict: dict[str, Any]) -> list[dict[str, Any]]:
     args = QueryGuarantorsArgs.model_validate(args_dict)
     cache_key = f"guarantors:{args.borrower_id}"
@@ -305,6 +340,10 @@ def query_guarantors(args_dict: dict[str, Any]) -> list[dict[str, Any]]:
     return guarantors
 
 
+@register_host_function(
+    "query_collection_records",
+    "query_collection_records({'loan_id': str}) -> list: record_id, loan_id, action_date, action_type, outcome, agent, notes, next_action_date",
+)
 def query_collection_records(args_dict: dict[str, Any]) -> list[dict[str, Any]]:
     args = QueryCollectionRecordsArgs.model_validate(args_dict)
     cache_key = f"collections:{args.loan_id}"
@@ -333,6 +372,10 @@ def query_collection_records(args_dict: dict[str, Any]) -> list[dict[str, Any]]:
     return records
 
 
+@register_host_function(
+    "query_transactions",
+    "query_transactions({'borrower_id': str, 'limit': int=20}) -> list: transaction_id, borrower_id, date, type, amount, channel, reference, loan_id",
+)
 def query_transactions(args_dict: dict[str, Any]) -> list[dict[str, Any]]:
     args = QueryTransactionsArgs.model_validate(args_dict)
     cache_key = f"transactions:{args.borrower_id}"
@@ -358,6 +401,10 @@ def query_transactions(args_dict: dict[str, Any]) -> list[dict[str, Any]]:
     return transactions
 
 
+@register_host_function(
+    "query_portfolio_summary",
+    "query_portfolio_summary({'city': str|None}) -> dict: scope(str), total_borrowers(int), total_loans(int), total_outstanding(int), total_disbursed(int), avg_loan_amount(int), avg_interest_rate(float), npl_ratio(float), current_ratio(float), dpd_30_ratio(float), dpd_60_ratio(float), dpd_90_ratio(float). Pass city=None for all.",
+)
 def query_portfolio_summary(args_dict: dict[str, Any]) -> dict[str, Any]:
     args = QueryPortfolioSummaryArgs.model_validate(args_dict)
     key = f"portfolio:{(args.city or 'all').lower()}"
@@ -378,6 +425,10 @@ def query_portfolio_summary(args_dict: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@register_host_function(
+    "query_delinquency_stats",
+    "query_delinquency_stats({'bucket': str|None}) -> list by DPD bucket: loan_count, total_outstanding, avg_dpd, recovery_rate. Buckets: current, 1-30, 31-60, 61-90, 91-120, 120+",
+)
 def query_delinquency_stats(args_dict: dict[str, Any]) -> list[dict[str, Any]]:
     args = QueryDelinquencyStatsArgs.model_validate(args_dict)
     _seeded(f"delinquency:{args.bucket or 'all'}")
@@ -401,8 +452,11 @@ def query_delinquency_stats(args_dict: dict[str, Any]) -> list[dict[str, Any]]:
 # Library bridge functions — wrap pandas/networkx/numpy for Monty code
 # ---------------------------------------------------------------------------
 
+@register_host_function(
+    "tabulate_data",
+    "tabulate_data({'records': list[dict], 'columns': list[str]|None, 'sort_by': str|None, 'ascending': bool=True}) -> sorted/filtered records via pandas",
+)
 def tabulate_data(args_dict: dict[str, Any]) -> list[dict[str, Any]]:
-    """Sort/filter/select columns from records using pandas."""
     import pandas as pd
     args = TabulateDataArgs.model_validate(args_dict)
     df = pd.DataFrame(args.records)
@@ -413,8 +467,11 @@ def tabulate_data(args_dict: dict[str, Any]) -> list[dict[str, Any]]:
     return df.to_dict(orient="records")
 
 
+@register_host_function(
+    "aggregate_data",
+    "aggregate_data({'records': list[dict], 'group_by': str|list[str], 'aggregations': {'col': 'sum|mean|count|min|max'}}) -> grouped results via pandas",
+)
 def aggregate_data(args_dict: dict[str, Any]) -> list[dict[str, Any]]:
-    """Group-by aggregation using pandas. aggfunc: sum/mean/count/min/max."""
     import pandas as pd
     args = AggregateDataArgs.model_validate(args_dict)
     df = pd.DataFrame(args.records)
@@ -427,8 +484,11 @@ def aggregate_data(args_dict: dict[str, Any]) -> list[dict[str, Any]]:
     return result.to_dict(orient="records")
 
 
+@register_host_function(
+    "pivot_data",
+    "pivot_data({'records': list[dict], 'index': str, 'columns': str, 'values': str, 'aggfunc': str='sum'}) -> {columns, index, values} via pandas",
+)
 def pivot_data(args_dict: dict[str, Any]) -> dict[str, Any]:
-    """Pivot table using pandas. Returns {columns, index, values}."""
     import pandas as pd
     args = PivotDataArgs.model_validate(args_dict)
     df = pd.DataFrame(args.records)
@@ -441,8 +501,11 @@ def pivot_data(args_dict: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@register_host_function(
+    "compute_statistics",
+    "compute_statistics({'values': list[float]}) -> dict: count, mean, median, std, min, max, p25, p75, p90, sum via numpy",
+)
 def compute_statistics(args_dict: dict[str, Any]) -> dict[str, float]:
-    """Descriptive statistics using numpy."""
     import numpy as np
     args = ComputeStatisticsArgs.model_validate(args_dict)
     arr = np.array(args.values, dtype=float)
@@ -460,14 +523,16 @@ def compute_statistics(args_dict: dict[str, Any]) -> dict[str, float]:
     }
 
 
+@register_host_function(
+    "compute_correlation",
+    "compute_correlation({'x_values': list[float], 'y_values': list[float]}) -> dict: pearson, spearman, p_value, n",
+)
 def compute_correlation(args_dict: dict[str, Any]) -> dict[str, float]:
-    """Pearson and Spearman correlation using numpy/scipy."""
     import numpy as np
     args = ComputeCorrelationArgs.model_validate(args_dict)
     x = np.array(args.x_values, dtype=float)
     y = np.array(args.y_values, dtype=float)
     pearson = float(np.corrcoef(x, y)[0, 1])
-    # Spearman via rank correlation
     from scipy.stats import spearmanr
     spearman, p_value = spearmanr(x, y)
     return {
@@ -478,8 +543,11 @@ def compute_correlation(args_dict: dict[str, Any]) -> dict[str, float]:
     }
 
 
+@register_host_function(
+    "analyze_network",
+    "analyze_network({'edges': list[[str,str]], 'analysis': 'components|centrality|shortest_path|degree', 'source': str|None, 'target': str|None}) -> graph analysis via networkx",
+)
 def analyze_network(args_dict: dict[str, Any]) -> dict[str, Any]:
-    """Graph analysis using networkx. analysis: components/centrality/shortest_path/degree."""
     import networkx as nx
     args = AnalyzeNetworkArgs.model_validate(args_dict)
     G = nx.Graph()
@@ -516,8 +584,11 @@ def analyze_network(args_dict: dict[str, Any]) -> dict[str, Any]:
     return {"error": f"unknown analysis: {args.analysis}"}
 
 
+@register_host_function(
+    "find_related_entities",
+    "find_related_entities({'edges': list[[str,str]], 'entity_id': str, 'depth': int=2}) -> BFS related entities by distance via networkx",
+)
 def find_related_entities(args_dict: dict[str, Any]) -> dict[str, Any]:
-    """BFS from entity_id up to depth. Returns connected entities by distance."""
     import networkx as nx
     args = FindRelatedEntitiesArgs.model_validate(args_dict)
     G = nx.Graph()
@@ -533,73 +604,49 @@ def find_related_entities(args_dict: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Registry
+# Human input functions (snapshot-based, pauses sandbox for user input)
 # ---------------------------------------------------------------------------
 
-HOST_FUNCTIONS: dict[str, Callable] = {
-    # Core domain
-    "query_borrower": query_borrower,
-    "query_loans": query_loans,
-    "query_borrowers_by_city": query_borrowers_by_city,
-    "query_loan_details": query_loan_details,
-    "query_payments": query_payments,
-    "query_collateral": query_collateral,
-    "query_guarantors": query_guarantors,
-    "query_collection_records": query_collection_records,
-    "query_transactions": query_transactions,
-    # Aggregations
-    "query_portfolio_summary": query_portfolio_summary,
-    "query_delinquency_stats": query_delinquency_stats,
-    # Library bridges (pandas)
-    "tabulate_data": tabulate_data,
-    "aggregate_data": aggregate_data,
-    "pivot_data": pivot_data,
-    # Library bridges (numpy/scipy)
-    "compute_statistics": compute_statistics,
-    "compute_correlation": compute_correlation,
-    # Library bridges (networkx)
-    "analyze_network": analyze_network,
-    "find_related_entities": find_related_entities,
-    # Human input — placeholders, resolved via snapshot loop or mocked in tests
-    "ask_user": lambda d: d.get("prompt", ""),
-    "ask_number": lambda d: d.get("min", 0) or 0,
-    "ask_confirm": lambda d: True,
-    "ask_choice": lambda d: (d.get("options") or [""])[0],
-}
-
-HUMAN_INPUT_FUNCTIONS: set[str] = {"ask_user", "ask_number", "ask_confirm", "ask_choice"}
-
-HOST_FUNCTION_DESCRIPTIONS: dict[str, str] = {
-    # Core domain
-    "query_borrower": "query_borrower({'name': str}) -> dict: borrower_id, name, address, city, phone, email, credit_score, monthly_income, employment_status",
-    "query_loans": "query_loans({'borrower_id': str}) -> list of loans: loan_id, borrower_id, product, amount, tenor_months, interest_rate, status, dpd, disbursed_date",
-    "query_borrowers_by_city": "query_borrowers_by_city({'city': str, 'limit': int=10}) -> list: borrower_id, name, city, credit_score, monthly_income, total_loans, total_outstanding",
-    "query_loan_details": "query_loan_details({'loan_id': str}) -> dict: loan info + payments + collateral + collection_records for a single loan",
-    "query_payments": "query_payments({'loan_id': str}) -> list: payment_id, loan_id, amount, payment_date, method, status, late_fee",
-    "query_collateral": "query_collateral({'loan_id': str}) -> list: collateral_id, loan_id, type, description, appraised_value, appraisal_date, status",
-    "query_guarantors": "query_guarantors({'borrower_id': str}) -> list: guarantor_id, borrower_id, name, relationship, phone, monthly_income, guarantee_amount",
-    "query_collection_records": "query_collection_records({'loan_id': str}) -> list: record_id, loan_id, action_date, action_type, outcome, agent, notes, next_action_date",
-    "query_transactions": "query_transactions({'borrower_id': str, 'limit': int=20}) -> list: transaction_id, borrower_id, date, type, amount, channel, reference, loan_id",
-    # Aggregations
-    "query_portfolio_summary": "query_portfolio_summary({'city': str|None}) -> dict: scope(str), total_borrowers(int), total_loans(int), total_outstanding(int), total_disbursed(int), avg_loan_amount(int), avg_interest_rate(float), npl_ratio(float), current_ratio(float), dpd_30_ratio(float), dpd_60_ratio(float), dpd_90_ratio(float). Pass city=None for all.",
-    "query_delinquency_stats": "query_delinquency_stats({'bucket': str|None}) -> list by DPD bucket: loan_count, total_outstanding, avg_dpd, recovery_rate. Buckets: current, 1-30, 31-60, 61-90, 91-120, 120+",
-    # Library bridges
-    "tabulate_data": "tabulate_data({'records': list[dict], 'columns': list[str]|None, 'sort_by': str|None, 'ascending': bool=True}) -> sorted/filtered records via pandas",
-    "aggregate_data": "aggregate_data({'records': list[dict], 'group_by': str|list[str], 'aggregations': {'col': 'sum|mean|count|min|max'}}) -> grouped results via pandas",
-    "pivot_data": "pivot_data({'records': list[dict], 'index': str, 'columns': str, 'values': str, 'aggfunc': str='sum'}) -> {columns, index, values} via pandas",
-    "compute_statistics": "compute_statistics({'values': list[float]}) -> dict: count, mean, median, std, min, max, p25, p75, p90, sum via numpy",
-    "compute_correlation": "compute_correlation({'x_values': list[float], 'y_values': list[float]}) -> dict: pearson, spearman, p_value, n",
-    "analyze_network": "analyze_network({'edges': list[[str,str]], 'analysis': 'components|centrality|shortest_path|degree', 'source': str|None, 'target': str|None}) -> graph analysis via networkx",
-    "find_related_entities": "find_related_entities({'edges': list[[str,str]], 'entity_id': str, 'depth': int=2}) -> BFS related entities by distance via networkx",
-    # Human input (snapshot-based, pauses sandbox for user input)
-    "ask_user": "ask_user({'prompt': str}) -> str: pause and ask user for text input",
-    "ask_number": "ask_number({'prompt': str, 'min': float|None, 'max': float|None}) -> float: pause and ask user for number",
-    "ask_confirm": "ask_confirm({'prompt': str}) -> bool: pause and ask user yes/no",
-    "ask_choice": "ask_choice({'prompt': str, 'options': list[str]}) -> str: pause and ask user to pick from options",
-}
+@register_host_function(
+    "ask_user",
+    "ask_user({'prompt': str}) -> str: pause and ask user for text input",
+    human_input=True,
+)
+def ask_user(d: dict) -> str:
+    return d.get("prompt", "")
 
 
-def build_external_lookup(allowlist: list[str] | None = None) -> dict[str, Callable]:
-    if allowlist is None:
-        return dict(HOST_FUNCTIONS)
-    return {k: v for k, v in HOST_FUNCTIONS.items() if k in allowlist}
+@register_host_function(
+    "ask_number",
+    "ask_number({'prompt': str, 'min': float|None, 'max': float|None}) -> float: pause and ask user for number",
+    human_input=True,
+)
+def ask_number(d: dict) -> float:
+    return d.get("min", 0) or 0
+
+
+@register_host_function(
+    "ask_confirm",
+    "ask_confirm({'prompt': str}) -> bool: pause and ask user yes/no",
+    human_input=True,
+)
+def ask_confirm(d: dict) -> bool:
+    return True
+
+
+@register_host_function(
+    "ask_choice",
+    "ask_choice({'prompt': str, 'options': list[str]}) -> str: pause and ask user to pick from options",
+    human_input=True,
+)
+def ask_choice(d: dict) -> str:
+    return (d.get("options") or [""])[0]
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatible aliases — point to registry
+# ---------------------------------------------------------------------------
+
+HOST_FUNCTIONS = get_functions()
+HOST_FUNCTION_DESCRIPTIONS = get_descriptions()
+HUMAN_INPUT_FUNCTIONS = get_human_input_functions()

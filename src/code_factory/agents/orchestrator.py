@@ -9,7 +9,7 @@ from pydantic_ai.settings import ModelSettings
 
 from ..config import Settings, get_settings, resolve_model
 from ..context.manager import write_findings_file
-from ..sandbox.host_functions import HOST_FUNCTION_DESCRIPTIONS
+from ..sandbox.registry import get_descriptions as _get_host_descriptions
 from ..sandbox.runner import RunResult, run_solution, run_tests
 from ..vault.manager import VaultManager
 from ..vault.models import RunRecord, StructuralMatch, TicketStatus
@@ -105,9 +105,10 @@ def _syntax_check(code: str) -> str | None:
 
 
 def _fn_docs(allowlist: list[str]) -> str:
+    descs = _get_host_descriptions()
     return "\n".join(
-        f"- {HOST_FUNCTION_DESCRIPTIONS[f]}" for f in allowlist
-        if f in HOST_FUNCTION_DESCRIPTIONS
+        f"- {descs[f]}" for f in allowlist
+        if f in descs
     )
 
 
@@ -171,7 +172,7 @@ def _verify_code(code: str, allowlist: list[str], spec: str = "",
     called = [fn for fn in allowlist if fn + "(" in code]
     if not called:
         warnings.append(f"WARNING: code calls none of {allowlist}. Likely hardcoded data.")
-    for fn in HOST_FUNCTION_DESCRIPTIONS:
+    for fn in _get_host_descriptions():
         if fn not in allowlist and fn + "(" in code:
             allowlist.append(fn)
             warnings.append(f"auto-fixed: added {fn} to allowlist (used in code)")
@@ -234,7 +235,8 @@ def build_orchestrator(settings: Settings | None = None) -> Agent:
     if settings is None:
         settings = get_settings()
 
-    fn_names = list(HOST_FUNCTION_DESCRIPTIONS.keys())
+    host_descs = _get_host_descriptions()
+    fn_names = list(host_descs.keys())
 
     ms = ModelSettings(max_tokens=settings.max_tokens)
 
@@ -352,7 +354,7 @@ CRITICAL: Use exact markers ===RESEARCH===, ===TESTS===, ===CODE===, ===REVIEW==
         if limit_msg:
             return limit_msg + " Present what you have to the user."
         vault = ctx.deps.vault
-        valid = [f for f in host_functions if f in HOST_FUNCTION_DESCRIPTIONS] or fn_names
+        valid = [f for f in host_functions if f in host_descs] or fn_names
         input_keys = list((input_schema or {}).keys())
         reusable_statuses = (TicketStatus.APPROVED, TicketStatus.CLOSED, TicketStatus.REUSED, TicketStatus.ITERATING)
         limits = ctx.deps.settings.sandbox.clamp()

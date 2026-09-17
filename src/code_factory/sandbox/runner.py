@@ -6,9 +6,8 @@ from .host_functions import (
     AskConfirmArgs,
     AskNumberArgs,
     AskUserArgs,
-    HUMAN_INPUT_FUNCTIONS,
-    build_external_lookup,
 )
+from .registry import build_external_lookup, get_human_input_functions
 
 
 @dataclass
@@ -90,7 +89,7 @@ def run_solution(code: str, inputs: dict[str, Any] | None = None,
     wrapped = {"inputs": inputs or {}}
     resource_limits = ResourceLimits(**limits) if limits else None
 
-    has_human_funcs = any(f in (host_function_allowlist or []) for f in HUMAN_INPUT_FUNCTIONS)
+    has_human_funcs = any(f in (host_function_allowlist or []) for f in get_human_input_functions())
     if not has_human_funcs:
         # No ask_* functions — use fast path
         try:
@@ -115,7 +114,7 @@ def run_solution(code: str, inputs: dict[str, Any] | None = None,
 
                     suspensions.append({"function": name, "args": list(args)})
 
-                    if name in HUMAN_INPUT_FUNCTIONS:
+                    if name in get_human_input_functions():
                         if interactive:
                             value = _collect_human_input(name, args)
                         else:
