@@ -53,7 +53,7 @@ class SandboxLimits(BaseSettings):
 
 
 class Settings(BaseSettings):
-    vault_path: Path = Path("/home/kwang/Documents/dev/code-factory-repo")
+    vault_path: Path = Path("~/.code-factory/vault").expanduser()
 
     provider: str = "ling"
 
