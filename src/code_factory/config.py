@@ -54,6 +54,7 @@ class SandboxLimits(BaseSettings):
 
 class Settings(BaseSettings):
     vault_path: Path = Path("vault")
+    vault_git: bool = False
 
     provider: str = "ling"
 
@@ -68,6 +69,7 @@ class Settings(BaseSettings):
     single_agent: bool = False
     max_tokens: int = 0
     context_window: int = 0
+    request_limit: int = 25
 
     openai_base_url: str = "http://localhost:8081/v1"
     openai_api_key: str = "not-needed"

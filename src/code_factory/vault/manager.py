@@ -10,22 +10,28 @@ from .models import RunRecord, StructuralMatch, Ticket, TicketStatus, TicketSumm
 
 
 class VaultManager:
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, git_enabled: bool = False):
         self.root = root
+        self.git_enabled = git_enabled
         self.tickets_dir = root / "tickets"
         self.registry_path = root / "registry.json"
         self._ensure_init()
 
     def _ensure_init(self):
         self.tickets_dir.mkdir(parents=True, exist_ok=True)
-        if not (self.root / ".git").exists():
-            self._git("init")
-        if not self.registry_path.exists():
+        new_registry = not self.registry_path.exists()
+        if new_registry:
             self.registry_path.write_text("[]")
-            self._git("add", "registry.json")
-            self._git("commit", "-m", "init vault")
+        if self.git_enabled:
+            if not (self.root / ".git").exists():
+                self._git("init")
+            if new_registry:
+                self._git("add", "registry.json")
+                self._git("commit", "-m", "init vault")
 
     def _git(self, *args: str):
+        if not self.git_enabled:
+            return
         subprocess.run(
             ["git", *args],
             cwd=self.root,
@@ -91,6 +97,8 @@ class VaultManager:
         (runs_dir / f"run_{n:03d}.json").write_text(record.model_dump_json(indent=2))
 
     def commit(self, ticket_id: str, message: str):
+        if not self.git_enabled:
+            return
         self._git("add", "-A")
         result = subprocess.run(
             ["git", "diff", "--cached", "--quiet"],

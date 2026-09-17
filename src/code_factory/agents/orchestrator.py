@@ -546,16 +546,21 @@ CRITICAL: Use exact markers ===RESEARCH===, ===TESTS===, ===CODE===, ===REVIEW==
 
     @agent.tool
     async def close_ticket(ctx: RunContext[FactoryDeps], ticket_id: str) -> str:
-        """Close ticket after user satisfied."""
+        """Close ticket after user satisfied. Call ONCE only."""
         _status("🔒", f"closing {ticket_id}")
+        limit_msg = ctx.deps.check_limit("close_ticket", 2)
+        if limit_msg:
+            raise RuntimeError(f"{ticket_id} already closed. Task complete.")
         vault = ctx.deps.vault
         ticket = vault.load_ticket(ticket_id)
         if not ticket:
             return f"{ticket_id} not found."
+        if ticket.status == TicketStatus.CLOSED:
+            return f"{ticket_id} already closed. Task complete — stop calling tools and give final answer."
         ticket.status = TicketStatus.CLOSED
         vault.save_ticket(ticket)
         vault.commit(ticket_id, "closed")
-        return f"{ticket_id} closed."
+        return f"{ticket_id} closed. Task complete — stop calling tools and give final answer."
 
     @agent.tool
     async def peek_result(ctx: RunContext[FactoryDeps], ticket_id: str, max_chars: int = 500) -> str:

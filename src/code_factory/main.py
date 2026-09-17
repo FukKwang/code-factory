@@ -27,14 +27,37 @@ def _build(args):
     os.environ.setdefault("OPENAI_BASE_URL", settings.openai_base_url)
     os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
 
+    from pydantic_ai import UsageLimits
+
     from .agents.orchestrator import FactoryDeps, build_orchestrator
     from .context.manager import compact_messages, maybe_compact
     from .vault.manager import VaultManager
 
-    vault = VaultManager(settings.vault_path)
+    vault = VaultManager(settings.vault_path, git_enabled=settings.vault_git)
     deps = FactoryDeps(vault=vault, settings=settings)
     agent = build_orchestrator(settings)
     return settings, deps, agent, compact_messages, maybe_compact
+
+
+def _show_last_result(deps):
+    tid = deps.current_ticket_id
+    if not tid:
+        print("Task completed.")
+        return
+    runs_dir = deps.vault.ticket_dir(tid) / "runs"
+    if not runs_dir.exists():
+        print(f"{tid} completed (no run output).")
+        return
+    run_files = sorted(runs_dir.glob("run_*.json"), reverse=True)
+    if not run_files:
+        print(f"{tid} completed (no run output).")
+        return
+    import json
+    data = json.loads(run_files[0].read_text())
+    output = data.get("output", data.get("error", ""))
+    if isinstance(output, str) and len(output) > 1000:
+        output = output[:1000] + "..."
+    print(f"{tid} completed. Last output:\n{output}")
 
 
 async def _run_loop(settings, deps, agent, compact_messages, maybe_compact):
@@ -65,7 +88,10 @@ async def _run_loop(settings, deps, agent, compact_messages, maybe_compact):
             pu = getattr(agent, "_pipeline_usage", None)
             if pu:
                 pu["cache_hit"] = pu["cache_miss"] = pu["output"] = 0
-            result = await agent.run(user_input, deps=deps, message_history=history)
+            result = await agent.run(
+                user_input, deps=deps, message_history=history,
+                usage_limits=UsageLimits(request_limit=settings.request_limit),
+            )
             print(result.output)
             u = result.usage
             details = u.details or {}
@@ -82,10 +108,17 @@ async def _run_loop(settings, deps, agent, compact_messages, maybe_compact):
             print()
             history = result.all_messages()
         except Exception as e:
-            print(f"Error: {type(e).__name__}: {e}")
-            if "token limit" in str(e).lower() or "exceeded" in str(e).lower():
+            err_str = str(e).lower()
+            task_done = "already closed" in err_str or "task complete" in err_str
+            if task_done or "usagelimitexceeded" in type(e).__name__.lower() or "request_limit" in err_str:
+                _show_last_result(deps)
+                history = compact_messages(history, keep_last=2)
+            elif "token limit" in err_str or "exceeded" in err_str:
+                print(f"Error: {type(e).__name__}: {e}")
                 history = compact_messages(history, keep_last=2)
                 print("(context compacted, try again)")
+            else:
+                print(f"Error: {type(e).__name__}: {e}")
             print()
 
 
