@@ -53,7 +53,7 @@ class SandboxLimits(BaseSettings):
 
 
 class Settings(BaseSettings):
-    vault_path: Path = Path("~/.code-factory/vault").expanduser()
+    vault_path: Path = Path("vault")
 
     provider: str = "ling"
 
