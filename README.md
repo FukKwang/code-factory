@@ -10,202 +10,320 @@ Think of it as a junior developer that writes, tests, and version-controls small
 - **Sandboxed execution** — Code runs in Pydantic Monty (restricted Python), never on host
 - **Git-tracked vault** — Every ticket, spec, test, solution, and run is committed automatically
 - **Reusable programs** — Tickets are parameterized; asking a similar question reuses existing code with new inputs
+- **Pluggable host functions** — Register custom data sources via decorator, no source editing needed
 - **KV cache optimization** — Budget-based compaction preserves LLM server's KV cache prefix between turns
 - **Multi-provider** — Local (llama.cpp), DeepSeek API, Qwen, or any OpenAI-compatible endpoint
-- **Host functions** — Data access only through declared functions (no raw SQL/URLs in generated code)
 
 ## Install
 
 ```bash
-git clone <repo-url> && cd code-factory
-pip install -e .
+# From GitHub
+pip install git+https://github.com/FukKwang/code-factory.git
+
+# From local source (editable)
+pip install -e /path/to/code-factory
+
+# From wheel
+python -m build  # produces dist/*.whl
+pip install dist/code_factory-0.1.0-py3-none-any.whl
 ```
 
 Requirements: Python 3.11+
 
 ## Quick Start
 
+### CLI
+
 ```bash
-# Ling 3.0 (llama.cpp on port 8081)
+# Default: local llama.cpp on port 8081
 code-factory
 
 # DeepSeek API
 CODE_FACTORY_DEEPSEEK_API_KEY=sk-... code-factory -p deepseek
 
-# Qwen 3.5 9B (llama.cpp on port 8082)
+# Qwen (llama.cpp on port 8082)
 code-factory -p qwen
 
 # Override model for all roles
 code-factory -m "openai-chat:my-model"
 ```
 
-## CLI Flags
+### As a library
 
-| Flag | Description |
-|------|-------------|
-| `-p`, `--provider` | Provider preset: `ling`, `deepseek`, `qwen` |
-| `-m`, `--model` | Override model string for all agent roles |
+```python
+import asyncio
+from code_factory.config import Settings
+from code_factory.agents.orchestrator import build_orchestrator, FactoryDeps
+from code_factory.vault.manager import VaultManager
 
-## Provider Presets
+settings = Settings(vault_path="./my_vault")
+vault = VaultManager(settings.vault_path)
+deps = FactoryDeps(vault=vault, settings=settings)
+agent = build_orchestrator(settings)
 
-| Preset | Model | Endpoint | Max Tokens |
-|--------|-------|----------|------------|
-| `ling` (default) | `openai-chat:ling-3.0-tiny` | `localhost:8081/v1` | 32768 |
-| `deepseek` | `deepseek:deepseek-chat` | `api.deepseek.com` | 8192 |
-| `qwen` | `qwen:qwen3-59b` | `localhost:8082/v1` | 32768 |
-
-## Environment Variables
-
-All prefixed with `CODE_FACTORY_`:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PROVIDER` | `ling` | Provider preset name |
-| `DEEPSEEK_API_KEY` | — | Required for `deepseek` provider |
-| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | DeepSeek API endpoint |
-| `QWEN_BASE_URL` | `http://localhost:8082/v1` | Qwen endpoint |
-| `OPENAI_BASE_URL` | `http://localhost:8081/v1` | Default OpenAI-compatible endpoint |
-| `VAULT_PATH` | `~/Documents/dev/code-factory-repo` | Git vault location |
-| `MODEL_ORCHESTRATOR` | (from preset) | Override per-role model |
-| `MODEL_RESEARCHER` | (from preset) | Override per-role model |
-| `MODEL_CODER` | (from preset) | Override per-role model |
-| `MODEL_REVIEWER` | (from preset) | Override per-role model |
-| `MODEL_TEST_WRITER` | (from preset) | Override per-role model |
-
-Supports `.env` file in working directory.
+result = asyncio.run(agent.run("Show loans for borrower Ahmad", deps=deps))
+print(result.output)
+```
 
 ## Architecture
 
 ```
-User
-  |
-  v
-Orchestrator (main agent, owns tools)
-  |
-  |-- search_vault          → find & reuse existing programs
-  |-- create_ticket          → new parameterized program
-  |-- generate_and_test      → full TDD pipeline (below)
-  |-- iterate_code           → modify based on feedback
-  |-- close_ticket           → mark done
-  |
-  |  TDD Pipeline (generate_and_test):
-  |  1. Researcher       → analyzes requirements, writes findings
-  |  2. Test Writer      → generates assert-based tests from spec
-  |  3. Coder            → writes Monty-compatible code (TDD)
-  |  4. Monty Sandbox    → runs code + tests
-  |  5. Reviewer         → plain-language summary for user
-  |
-  v
-Vault (git repo)           Sandbox (Pydantic Monty)
+User Query
+    │
+    ▼
+┌──────────────────────────────────────────────┐
+│  ORCHESTRATOR (brain)                        │
+│  Tools: execute_task, peek_result,           │
+│         iterate_code, close_ticket           │
+│                                              │
+│  execute_task pipeline:                      │
+│    1. Search vault for reuse                 │
+│    2. Researcher → analyzes requirements     │
+│    3. Test Writer → assert-based tests       │
+│    4. Coder → Monty-compatible Python        │
+│    5. Verify + auto-fix code                 │
+│    6. Run tests in sandbox                   │
+│    7. Run solution in sandbox                │
+│    8. Reviewer → plain-language summary      │
+│    9. Save to vault + git commit             │
+└───────┬──────────────┬───────────────────────┘
+        │              │
+   ┌────▼────┐    ┌────▼────┐
+   │  VAULT  │    │ SANDBOX │
+   │ (git)   │    │ (Monty) │
+   │         │    │         │
+   │ tickets │    │ code    │
+   │ specs   │    │ can ONLY│
+   │ tests   │    │ call    │
+   │ code    │    │ host    │
+   │ runs    │    │ funcs   │
+   └─────────┘    └────┬────┘
+                       │
+              ┌────────▼────────┐
+              │ HOST FUNCTIONS  │
+              │ (pluggable)     │
+              │                 │
+              │ Default: Faker  │
+              │ Custom: your    │
+              │ DB/API/CSV      │
+              └─────────────────┘
 ```
 
 ### Agents
 
-| Agent | Role | Instructions |
+| Agent | Role | Model Budget |
 |-------|------|-------------|
-| **Orchestrator** | Routes user requests, manages ticket lifecycle | Pipeline coordination, tool dispatch |
-| **Researcher** | Analyzes requirements | Produces structured findings (objective, data needed, host functions, edge cases) |
-| **Coder** | Writes Monty-safe Python | Strict rules: `result` at module level, use `inputs` dict, no imports beyond stdlib subset |
-| **Test Writer** | Generates validation | Assert-only tests against `result` variable |
-| **Reviewer** | Evaluates output | Plain-language summary, no code shown to user |
+| **Orchestrator** | Routes requests, manages ticket lifecycle, dispatches tools | `max_tokens` |
+| **Researcher** | Analyzes requirements → structured findings | `min(max_tokens, 2048)` |
+| **Coder** | Writes Monty-safe Python from spec + tests | `min(max_tokens, 2048)` |
+| **Test Writer** | Generates assert statements for `result` variable | `min(max_tokens, 2048)` |
+| **Reviewer** | Plain-language summary of execution results | `min(max_tokens, 1024)` |
 
-Each agent can use a different model via `MODEL_*` env vars or per-role settings.
+Each agent can use a different model via `MODEL_*` env vars.
 
-## Ticket Lifecycle
+## Host Functions
 
+Generated code accesses data **only** through host functions. No raw database queries or API calls in sandboxed code.
+
+### Registry pattern
+
+Register custom host functions via decorator — no source editing needed:
+
+```python
+from code_factory import register_host_function, clear_registry
+
+# Remove default Faker functions
+clear_registry()
+
+# Register your own
+@register_host_function(
+    "get_customer",
+    "get_customer({'id': str}) -> dict: customer profile from CRM"
+)
+def get_customer(args_dict: dict) -> dict:
+    return db.query("SELECT * FROM customers WHERE id = %s", args_dict["id"])
+
+@register_host_function(
+    "get_orders",
+    "get_orders({'customer_id': str}) -> list[dict]: order history"
+)
+def get_orders(args_dict: dict) -> list:
+    return db.query("SELECT * FROM orders WHERE customer_id = %s", args_dict["customer_id"])
+
+@register_host_function(
+    "ask_date_range",
+    "ask_date_range({'prompt': str}) -> str: ask user for date range",
+    human_input=True,  # pauses sandbox for user input
+)
+def ask_date_range(args_dict: dict) -> str:
+    return args_dict.get("prompt", "")
 ```
-NEW → GATHERING → SPEC_DRAFTED → TESTS_DRAFTED → CODE_DRAFTED
-                                                       |
-                                          tests pass? --+-- no → ITERATING → back to CODE_DRAFTED
-                                                        |
-                                                       yes
-                                                        |
-                                                    APPROVED → CLOSED
-                                                        |
-                                            (future similar query)
-                                                        |
-                                                      REUSED
+
+**Function contract:**
+- Takes `args_dict: dict[str, Any]` — validated via Pydantic model at trust boundary
+- Returns JSON-serializable data (dict, list, str, number, bool)
+- Description string tells the LLM what the function does and its signature
+- `human_input=True` marks functions that pause sandbox execution for user input
+
+### Default functions (Faker-based)
+
+Included as reference implementation for development/testing:
+
+**Domain** (interconnected via `borrower_id` / `loan_id`):
+- `query_borrower(name)` → borrower profile
+- `query_loans(borrower_id)` → list of loans
+- `query_borrowers_by_city(city, limit)` → borrower summaries
+- `query_payments(loan_id)` → payment history
+- `query_collateral(loan_id)` → collateral records
+- `query_guarantors(borrower_id)` → guarantor list
+- `query_collection_records(loan_id)` → collection activity
+- `query_transactions(borrower_id, limit)` → recent transactions
+- `query_portfolio_summary(city)` → portfolio-level stats
+- `query_delinquency_stats(bucket)` → DPD distribution
+
+**Library bridges** (wrap pandas/numpy/scipy/networkx for sandbox code):
+- `tabulate_data` → sort/filter/select columns (pandas)
+- `aggregate_data` → group-by aggregation (pandas)
+- `pivot_data` → pivot table (pandas)
+- `compute_statistics` → descriptive stats (numpy)
+- `compute_correlation` → Pearson/Spearman (scipy)
+- `analyze_network` → graph analysis (networkx)
+- `find_related_entities` → BFS traversal (networkx)
+
+**Human input** (snapshot-based, pauses sandbox):
+- `ask_user(prompt)` → free text
+- `ask_number(prompt, min, max)` → number with bounds
+- `ask_confirm(prompt)` → yes/no
+- `ask_choice(prompt, options)` → pick from list
+
+### Example: real database host functions
+
+```python
+from code_factory import register_host_function, clear_registry
+import psycopg2
+
+clear_registry()
+
+conn = psycopg2.connect("postgresql://user:pass@localhost/mydb")
+
+@register_host_function(
+    "query_employee",
+    "query_employee({'name': str}) -> dict: employee_id, name, department, salary, hire_date"
+)
+def query_employee(args_dict: dict) -> dict:
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT * FROM employees WHERE name ILIKE %s LIMIT 1", (args_dict["name"],))
+    return dict(cur.fetchone() or {})
+
+@register_host_function(
+    "query_team_members",
+    "query_team_members({'department': str}) -> list[dict]: employees in department"
+)
+def query_team_members(args_dict: dict) -> list:
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("SELECT * FROM employees WHERE department = %s", (args_dict["department"],))
+    return [dict(r) for r in cur.fetchall()]
 ```
 
-Every state transition creates a git commit in the vault.
-
-## Vault Structure
-
+Then run:
+```python
+agent = build_orchestrator(settings)
+result = await agent.run("Show all employees in Engineering department", deps=deps)
 ```
-code-factory-repo/
-├── .git/
-├── registry.json                  # search index (id, title, tags, summary)
-└── tickets/
-    └── TICKET-001/
-        ├── ticket.yaml            # metadata, status, requirements, input_schema
-        ├── spec.md                # generated spec
-        ├── test_solution.py       # generated tests (assert statements)
-        ├── solution.py            # Monty-compatible Python
-        └── runs/
-            ├── research.md        # researcher findings
-            ├── run_001.json       # execution record (inputs, output, success)
-            └── run_002.json
-```
+
+The orchestrator sees your registered functions, the coder writes sandbox code calling them, and the sandbox executes against your real database.
 
 ## Program Reuse
 
 Tickets are reusable programs, not one-off queries. When you ask "show loans for borrower ABC":
 
 1. **First time**: Creates ticket "Find loans by borrower name" with `input_schema: {borrower_name: "Name of borrower"}`. Generates code that reads `inputs["borrower_name"]`.
-2. **Next time**: `search_vault` finds existing ticket, extracts "DEF" from "show loans for borrower DEF", re-runs same code with new inputs.
+2. **Next time**: Vault search finds existing ticket, extracts "DEF" from "show loans for borrower DEF", re-runs same code with new inputs.
 
-This means generated code never hardcodes request-specific values — it reads from the `inputs` dict.
+Generated code never hardcodes request-specific values — it reads from the `inputs` dict.
 
-## Host Functions
+## Ticket Lifecycle
 
-Generated code accesses data only through declared host functions. No raw database queries or API calls in sandboxed code.
+```
+NEW → GATHERING → SPEC_DRAFTED → TESTS_DRAFTED → CODE_DRAFTED
+                                                       │
+                                          tests pass? ──┤
+                                                        │ no
+                                                   ITERATING
+                                                        │
+                                                       yes
+                                                        │
+                                                    APPROVED → CLOSED
+                                                        │
+                                            (future similar query)
+                                                        │
+                                                      REUSED
+```
 
-Currently available (Faker-based for development):
+Every state transition creates a git commit in the vault.
 
-**Domain functions** — interconnected via `borrower_id` / `loan_id`:
+## Code Verification
 
-| Function | Args | Returns |
-|----------|------|---------|
-| `query_borrower` | `name: str` | Borrower profile (id, address, city, credit score, income) |
-| `query_loans` | `borrower_id: str` | List of loans (amount, tenor, interest rate, status, DPD) |
-| `query_borrowers_by_city` | `city: str, limit: int` | List of borrower summaries in a city |
-| `query_payments` | `loan_id: str` | Payment history for a loan |
-| `query_collateral` | `loan_id: str` | Collateral records for a loan |
-| `query_guarantors` | `borrower_id: str` | Guarantors linked to a borrower |
-| `query_collection_records` | `loan_id: str` | Collection activity records for a loan |
-| `query_transactions` | `borrower_id: str, limit: int` | Recent transactions for a borrower |
-| `query_portfolio_summary` | `city: str (optional)` | Portfolio-level summary (total loans, outstanding, avg DPD) |
-| `query_delinquency_stats` | `bucket: str (optional)` | Delinquency distribution by DPD bucket |
+Before execution, generated code is automatically verified and fixed:
 
-**Library bridge functions** — wraps pandas/numpy/scipy/networkx for sandbox code:
+1. **`result` assignment** — auto-appends `result = fn()` if missing
+2. **Host function usage** — warns if no host functions called (likely hardcoded data)
+3. **Allowlist auto-expand** — if code calls a registered host function not in the ticket's allowlist, it's added automatically
+4. **Host function redefinition** — auto-removes if code redefines a host function
+5. **`inputs` dict usage** — warns if code doesn't read from `inputs` when `input_schema` is defined
+6. **Missing imports** — auto-adds stdlib imports (json, math, datetime, etc.) when used but not imported
 
-| Function | Args | Returns |
-|----------|------|---------|
-| `tabulate_data` | `records, columns, sort_by, ascending` | Filtered/sorted tabular data (pandas) |
-| `aggregate_data` | `records, group_by, aggregations` | Group-by aggregation results (pandas) |
-| `pivot_data` | `records, index, columns, values, aggfunc` | Pivot table (pandas) |
-| `compute_statistics` | `values: list[float]` | Descriptive stats: mean, median, std, min, max, quartiles (numpy) |
-| `compute_correlation` | `x_values, y_values` | Pearson and Spearman correlation with p-values (scipy) |
-| `analyze_network` | `edges, analysis, source, target` | Graph analysis: components, centrality, shortest path (networkx) |
-| `find_related_entities` | `edges, entity_id, depth` | BFS traversal to find connected entities (networkx) |
+## Configuration
 
-All functions validate arguments via Pydantic models at the trust boundary. Deterministic seeding ensures same input always returns same fake data. Each ticket declares which host functions its code may call (`host_function_allowlist`).
+### CLI flags
 
-To add real data sources, replace Faker implementations in `src/code_factory/sandbox/host_functions.py` with actual DB/API/CSV connectors.
+| Flag | Description |
+|------|-------------|
+| `-p`, `--provider` | Provider preset: `ling`, `deepseek`, `qwen` |
+| `-m`, `--model` | Override model string for all agent roles |
 
-## KV Cache Optimization
+### Environment variables
 
-LLM servers (llama.cpp, vLLM, DeepSeek) cache key-value pairs by token prefix. Modifying old messages breaks prefix match, forcing full recomputation.
+All prefixed with `CODE_FACTORY_` (supports `.env` file):
 
-code-factory uses budget-based compaction instead of per-turn compaction:
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PROVIDER` | `ling` | Provider preset name |
+| `VAULT_PATH` | `./vault` | Git vault directory (relative to working directory) |
+| `OPENAI_BASE_URL` | `http://localhost:8081/v1` | Default OpenAI-compatible endpoint |
+| `DEEPSEEK_API_KEY` | — | Required for `deepseek` provider |
+| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | DeepSeek API endpoint |
+| `QWEN_BASE_URL` | `http://localhost:8082/v1` | Qwen endpoint |
+| `MODEL_ORCHESTRATOR` | (from preset) | Override per-role model |
+| `MODEL_RESEARCHER` | (from preset) | Override per-role model |
+| `MODEL_CODER` | (from preset) | Override per-role model |
+| `MODEL_REVIEWER` | (from preset) | Override per-role model |
+| `MODEL_TEST_WRITER` | (from preset) | Override per-role model |
 
-| Token Budget Used | Action | Cache Impact |
-|-------------------|--------|-------------|
-| < 70% | No change | Full prefix reuse |
-| 70–90% | Light compact (keep last 6 messages, stub old tool returns) | Partial reuse |
-| > 90% | Aggressive compact (keep last 2 messages) | Minimal reuse |
+### Provider presets
 
-This follows DeepSeek/Leyline patterns: stable system prompt first, never modify already-sent prefix tokens, stub old tool outputs rather than deleting them, pin recent messages.
+| Preset | Model | Endpoint | Max Tokens |
+|--------|-------|----------|------------|
+| `ling` (default) | `openai-chat:ling-3.0-tiny` | `localhost:8081/v1` | 8192 |
+| `deepseek` | `deepseek:deepseek-flash` | `api.deepseek.com` | 8192 |
+| `qwen` | `qwen:qwen3-59b` | `localhost:8082/v1` | 32768 |
+
+## Vault Structure
+
+```
+vault/
+├── .git/
+├── registry.json              # search index
+└── tickets/
+    └── TICKET-001/
+        ├── ticket.yaml        # metadata, status, input_schema, allowlist
+        ├── spec.md            # generated spec
+        ├── test_solution.py   # assert statements
+        ├── solution.py        # Monty-compatible Python
+        └── runs/
+            ├── research.md    # researcher findings
+            └── run_001.json   # {inputs, output, success, error, timestamp}
+```
 
 ## Monty Sandbox Rules
 
@@ -218,19 +336,11 @@ Generated code runs in Pydantic Monty with these constraints:
 - Allowed imports: `json`, `math`, `datetime`, `re`, `collections`, `itertools`, `functools`, `dataclasses`, `typing`
 - Not allowed: inheritance, `yield`, `del`, `eval`/`exec`, third-party imports
 
-## Code Verification
-
-Before execution, generated code is automatically verified:
-
-1. **`result` assignment** — Auto-appends `result = fn()` call if missing
-2. **Host function usage** — Warns if no host functions called (likely hardcoded data)
-3. **Host function redefinition** — Auto-removes if code redefines a host function
-4. **`inputs` dict usage** — Warns if code doesn't read from `inputs` when `input_schema` is defined
-
 ## Project Structure
 
 ```
 src/code_factory/
+├── __init__.py                # exports: register_host_function, clear_registry
 ├── main.py                    # CLI entry, argparse, REPL loop
 ├── config.py                  # Settings, provider presets, model resolution
 ├── agents/
@@ -239,15 +349,28 @@ src/code_factory/
 │   ├── coder.py               # Monty code generation agent
 │   ├── test_writer.py         # Test generation agent
 │   └── reviewer.py            # Output review agent
-├── vault/
-│   ├── models.py              # Ticket, TicketStatus, RunRecord, TicketSummary
-│   └── manager.py             # CRUD, search (difflib), git operations
 ├── sandbox/
-│   ├── runner.py              # Monty session wrapper, fallback exec
-│   └── host_functions.py      # Faker-based data functions, allowlist builder
-└── context/
-    └── manager.py             # Token estimation, compaction, findings files
+│   ├── registry.py            # Host function decorator + registry
+│   ├── host_functions.py      # Default Faker-based implementations (22 functions)
+│   └── runner.py              # Monty session wrapper, test runner, fallback exec
+├── context/
+│   └── manager.py             # Token estimation, history compaction
+└── vault/
+    ├── models.py              # Ticket, TicketStatus, RunRecord, TicketSummary
+    └── manager.py             # Git-backed CRUD, search (text + structural), git ops
 ```
+
+## KV Cache Optimization
+
+LLM servers (llama.cpp, vLLM, DeepSeek) cache key-value pairs by token prefix. Modifying old messages breaks prefix match, forcing full recomputation.
+
+code-factory uses budget-based compaction:
+
+| Token Budget Used | Action | Cache Impact |
+|-------------------|--------|-------------|
+| < 70% | No change | Full prefix reuse |
+| 70–90% | Light compact (keep last 6 msgs, stub old tool returns) | Partial reuse |
+| > 90% | Aggressive compact (keep last 2 msgs) | Minimal reuse |
 
 ## Adding a Provider
 
@@ -256,69 +379,14 @@ src/code_factory/
 3. Add entry to `CUSTOM_PROVIDERS` dict
 4. Use: `code-factory -p <name>`
 
-## Adding a Host Function
+## Edge Cases and Limitations
 
-1. Define function in `sandbox/host_functions.py` with Pydantic args model
-2. Add to `HOST_FUNCTIONS` dict
-3. Add description to `HOST_FUNCTION_DESCRIPTIONS`
-4. Function is now available to all generated code
-
-## Test Prompts
-
-Prompts to verify pipeline end-to-end, ordered by complexity:
-
-### Simple lookup
-```
-Tell me about borrower Budi Santoso
-```
-Expects: `query_borrower` call, returns profile.
-
-### One-hop join
-```
-Show me all loans for borrower Rina Wijaya
-```
-Expects: `query_borrower` → `query_loans` chain.
-
-### Two-hop join
-```
-Show payment history for all loans belonging to borrower Andi Pratama
-```
-Expects: borrower → loans → `query_payments` per loan.
-
-### Multi-entity join
-```
-For borrower Siti Rahayu, show all guarantors and collateral across their loans
-```
-Expects: borrower → loans → `query_guarantors` + `query_collateral` per loan.
-
-### Aggregation (library bridge)
-```
-What is the average loan amount and total outstanding balance for borrowers in Jakarta?
-```
-Expects: `query_borrowers_by_city` → loans per borrower → `aggregate_data` or `compute_statistics`.
-
-### Portfolio analytics
-```
-Give me a delinquency breakdown by bucket across the whole portfolio
-```
-Expects: `query_delinquency_stats`, possibly `tabulate_data` for formatting.
-
-### Correlation (scipy bridge)
-```
-Is there a correlation between credit score and total loan amount across all borrowers in Bandung?
-```
-Expects: borrowers by city → loans per borrower → `compute_correlation`.
-
-### Network analysis (networkx bridge)
-```
-Build a relationship graph between borrowers and their guarantors in Surabaya, find who is connected to the most borrowers
-```
-Expects: `query_borrowers_by_city` → guarantors per borrower → `analyze_network`.
-
-### Ticket reuse
-Run any prompt above twice. Second run should find existing ticket in vault and reuse code with new/same inputs.
-
-Run with: `task ling`, `task qwen`, or `task ling:qwen`.
+- **Model quality**: Small models (4B params) may struggle with complex multi-hop queries or produce vague answers for ambiguous requests
+- **Token overflow**: Complex tool calls with large data payloads can exceed model's max_tokens — increase via `CODE_FACTORY_MAX_TOKENS`
+- **Faker data**: Default host functions return synthetic data. Same input key always produces same fake data (deterministic seeding)
+- **Sandbox restrictions**: No network access, no filesystem, no third-party imports inside sandbox. All data must flow through host functions
+- **Allowlist mismatch**: If the orchestrator picks wrong host functions, auto-expand in `_verify_code` catches and adds missing ones
+- **Human input functions**: `ask_*` functions pause sandbox via snapshot loop — only works in interactive mode (TTY)
 
 ## License
 
