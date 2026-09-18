@@ -6,7 +6,7 @@ code-factory: TUI coding harness using Pydantic AI + Pydantic Monty. Takes natur
 
 ## Model Serving
 
-Finetuned Qwen3-4B-Instruct-2507 (Q4_K_M) via llama.cpp server.
+Finetuned Qwen3-4B-Instruct-2507 (Q4_K_M, SFT-only) via llama.cpp server.
 
 ```bash
 ./serve.sh  # defaults below
@@ -14,7 +14,7 @@ Finetuned Qwen3-4B-Instruct-2507 (Q4_K_M) via llama.cpp server.
 
 | Parameter | Default | Env var |
 |-----------|---------|---------|
-| Model | `models/monty-coder-gguf_gguf/qwen3-4b.Q4_K_M.gguf` | arg $1 |
+| Model | `models/monty-coder-gguf_gguf/qwen3-4b-instruct-2507.Q4_K_M.gguf` | arg $1 |
 | Port | 8081 | `PORT` |
 | Host | 0.0.0.0 | `HOST` |
 | Context | 32768 | `CTX` |
@@ -53,6 +53,17 @@ See README.md for full examples.
 |---------|---------|---------|-------|
 | `vault_git` | `false` | `CODE_FACTORY_VAULT_GIT` | Enable git tracking in vault |
 | `request_limit` | `25` | `CODE_FACTORY_REQUEST_LIMIT` | Max pydantic-ai requests per run |
+
+## Training Environments
+
+Two Python virtualenvs exist for finetuning. **Always use `.venv-train`** for training.
+
+| Env | Path | Purpose | Key versions |
+|-----|------|---------|-------------|
+| `.venv-train` | `.venv-train/bin/python3` | **SFT/DPO finetuning** (use this) | unsloth 2026.9.4, torch 2.6.0+cu124 |
+| `unsloth_env` | `~/Documents/unsloth/unsloth_env/bin/python3` | Experimental (do not use for training) | unsloth 2026.6.9, torch 2.10.0+cu130 |
+
+Run training: `.venv-train/bin/python3 scripts/finetune.py`
 
 ## Key Paths
 
