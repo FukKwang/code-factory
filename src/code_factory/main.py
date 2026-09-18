@@ -3,6 +3,8 @@ import asyncio
 import os
 import sys
 
+from pydantic_ai import UsageLimits
+
 from .config import PROVIDER_PRESETS, Settings, get_settings
 
 
@@ -18,8 +20,8 @@ def _build(args):
     if args.provider:
         overrides["provider"] = args.provider
     if args.model:
-        for role in ("model_orchestrator", "model_researcher", "model_coder", "model_test_writer", "model_reviewer"):
-            overrides[role] = args.model
+        overrides["model_main"] = args.model
+        overrides["model_sub"] = args.model
 
     settings = Settings(**overrides) if overrides else get_settings()
 
@@ -27,15 +29,13 @@ def _build(args):
     os.environ.setdefault("OPENAI_BASE_URL", settings.openai_base_url)
     os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
 
-    from pydantic_ai import UsageLimits
-
-    from .agents.orchestrator import FactoryDeps, build_orchestrator
+    from .agents.programmer import FactoryDeps, build_programmer
     from .context.manager import compact_messages, maybe_compact
     from .vault.manager import VaultManager
 
     vault = VaultManager(settings.vault_path, git_enabled=settings.vault_git)
-    deps = FactoryDeps(vault=vault, settings=settings)
-    agent = build_orchestrator(settings)
+    deps = FactoryDeps(vault=vault, settings=settings, interactive=sys.stdin.isatty())
+    agent = build_programmer(settings)
     return settings, deps, agent, compact_messages, maybe_compact
 
 
@@ -61,7 +61,7 @@ def _show_last_result(deps):
 
 
 async def _run_loop(settings, deps, agent, compact_messages, maybe_compact):
-    print(f"provider: {settings.provider}  model: {settings.model_orchestrator}")
+    print(f"provider: {settings.provider}  model: {settings.model_main}")
     history = []
     while True:
         try:
@@ -74,20 +74,11 @@ async def _run_loop(settings, deps, agent, compact_messages, maybe_compact):
             break
         if user_input.lower() in ("clear", "/clear", "reset", "/reset"):
             history = []
-            deps._tool_counts = None
-            ph = getattr(agent, "_pipeline_history", None)
-            if ph is not None:
-                ph.clear()
             print("Session cleared.\n")
             continue
 
-        deps._tool_counts = None
-
         try:
             history = maybe_compact(history, settings.context_window)
-            pu = getattr(agent, "_pipeline_usage", None)
-            if pu:
-                pu["cache_hit"] = pu["cache_miss"] = pu["output"] = 0
             result = await agent.run(
                 user_input, deps=deps, message_history=history,
                 usage_limits=UsageLimits(request_limit=settings.request_limit),
@@ -97,13 +88,9 @@ async def _run_loop(settings, deps, agent, compact_messages, maybe_compact):
             details = u.details or {}
             cache_hit = details.get("prompt_cache_hit_tokens", 0)
             cache_miss = details.get("prompt_cache_miss_tokens", 0)
-            if pu:
-                cache_hit += pu["cache_hit"]
-                cache_miss += pu["cache_miss"]
             total_in = cache_hit + cache_miss
             hit_pct = (cache_hit / total_in * 100) if total_in else 0
-            total_out = u.output_tokens + (pu["output"] if pu else 0)
-            print(f"\n\033[2mtokens: in={cache_hit + cache_miss} out={total_out} "
+            print(f"\n\033[2mtokens: in={total_in} out={u.output_tokens} "
                   f"cache_hit={cache_hit} cache_miss={cache_miss} ({hit_pct:.0f}% hit)\033[0m")
             print()
             history = result.all_messages()

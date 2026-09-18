@@ -6,7 +6,7 @@
 #   ./serve.sh /path/to/model.gguf
 #   CTX=8192 PORT=9090 ./serve.sh
 
-MODEL="${1:-models/monty-coder-gguf_gguf/qwen3-4b.Q4_K_M.gguf}"
+MODEL="${1:-models/monty-coder-gguf_gguf/qwen3-4b-instruct-2507.Q4_K_M.gguf}"
 PORT="${PORT:-8081}"
 HOST="${HOST:-0.0.0.0}"
 CTX="${CTX:-32768}"

@@ -1,7 +1,5 @@
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
-
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -10,19 +8,16 @@ PROVIDER_PRESETS: dict[str, dict] = {
         "model": "openai-chat:ling-3.0-tiny",
         "max_tokens": 8192,
         "context_window": 8192,
-        "single_agent": False,
     },
     "qwen": {
         "model": "qwen:qwen3-59b",
         "max_tokens": 32768,
         "context_window": 32768,
-        "single_agent": False,
     },
     "deepseek": {
         "model": "deepseek:deepseek-flash",
         "max_tokens": 8192,
         "context_window": 65536,
-        "single_agent": True,
     },
 }
 
@@ -60,13 +55,9 @@ class Settings(BaseSettings):
 
     sandbox: SandboxLimits = SandboxLimits()
 
-    model_orchestrator: str = ""
-    model_researcher: str = ""
-    model_coder: str = ""
-    model_test_writer: str = ""
-    model_reviewer: str = ""
+    model_main: str = ""
+    model_sub: str = ""
 
-    single_agent: bool = False
     max_tokens: int = 0
     context_window: int = 0
     request_limit: int = 25
@@ -88,22 +79,14 @@ class Settings(BaseSettings):
         default_model = preset.get("model", PROVIDER_PRESETS["ling"]["model"])
         default_max = preset.get("max_tokens", 32768)
 
-        if not self.model_orchestrator:
-            self.model_orchestrator = default_model
-        if not self.model_researcher:
-            self.model_researcher = default_model
-        if not self.model_coder:
-            self.model_coder = default_model
-        if not self.model_test_writer:
-            self.model_test_writer = default_model
-        if not self.model_reviewer:
-            self.model_reviewer = default_model
+        if not self.model_main:
+            self.model_main = default_model
+        if not self.model_sub:
+            self.model_sub = default_model
         if not self.max_tokens:
             self.max_tokens = default_max
         if not self.context_window:
             self.context_window = preset.get("context_window", default_max)
-        if not self.single_agent and preset.get("single_agent"):
-            self.single_agent = preset["single_agent"]
         return self
 
 

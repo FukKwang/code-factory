@@ -53,13 +53,13 @@ code-factory -m "openai-chat:my-model"
 ```python
 import asyncio
 from code_factory.config import Settings
-from code_factory.agents.orchestrator import build_orchestrator, FactoryDeps
+from code_factory.agents.programmer import build_programmer, FactoryDeps
 from code_factory.vault.manager import VaultManager
 
 settings = Settings(vault_path="./my_vault")
 vault = VaultManager(settings.vault_path)
 deps = FactoryDeps(vault=vault, settings=settings)
-agent = build_orchestrator(settings)
+agent = build_programmer(settings)
 
 result = asyncio.run(agent.run("Show loans for borrower Ahmad", deps=deps))
 print(result.output)
@@ -72,20 +72,19 @@ User Query
     │
     ▼
 ┌──────────────────────────────────────────────┐
-│  ORCHESTRATOR (brain)                        │
-│  Tools: execute_task, peek_result,           │
-│         iterate_code, close_ticket           │
+│  PROGRAMMER (main model)                     │
+│  Tools: ask_human, list_functions,           │
+│         search_vault, generate_code,         │
+│         run_existing, iterate_code,          │
+│         peek_result, save_ticket             │
 │                                              │
-│  execute_task pipeline:                      │
-│    1. Search vault for reuse                 │
-│    2. Researcher → analyzes requirements     │
-│    3. Test Writer → assert-based tests       │
-│    4. Coder → Monty-compatible Python        │
-│    5. Verify + auto-fix code                 │
-│    6. Run tests in sandbox                   │
-│    7. Run solution in sandbox                │
-│    8. Reviewer → plain-language summary      │
-│    9. Save to vault + git commit             │
+│  Workflow:                                   │
+│    1. Understand requirement                 │
+│    2. ask_human to clarify if vague          │
+│    3. list_functions to find capabilities    │
+│    4. search_vault for reuse                 │
+│    5. generate_code (delegates to sub-agents)│
+│    6. Present result, iterate if needed      │
 └───────┬──────────────┬───────────────────────┘
         │              │
    ┌────▼────┐    ┌────▼────┐
@@ -111,15 +110,15 @@ User Query
 
 ### Agents
 
-| Agent | Role | Model Budget |
-|-------|------|-------------|
-| **Orchestrator** | Routes requests, manages ticket lifecycle, dispatches tools | `max_tokens` |
-| **Researcher** | Analyzes requirements → structured findings | `min(max_tokens, 2048)` |
-| **Coder** | Writes Monty-safe Python from spec + tests | `min(max_tokens, 2048)` |
-| **Test Writer** | Generates assert statements for `result` variable | `min(max_tokens, 2048)` |
-| **Reviewer** | Plain-language summary of execution results | `min(max_tokens, 1024)` |
+Two model tiers:
 
-Each agent can use a different model via `MODEL_*` env vars.
+| Agent | Model Tier | Role |
+|-------|-----------|------|
+| **Programmer** | main (`model_main`) | Understands requirements, negotiates with user, picks host functions, reviews results |
+| **Coder** | sub (`model_sub`) | Writes Monty-safe Python from precise spec + tests |
+| **Test Writer** | sub (`model_sub`) | Generates assert statements for `result` variable |
+
+Configure via `CODE_FACTORY_MODEL_MAIN` and `CODE_FACTORY_MODEL_SUB` env vars.
 
 ## Host Functions
 
@@ -227,11 +226,11 @@ def query_team_members(args_dict: dict) -> list:
 
 Then run:
 ```python
-agent = build_orchestrator(settings)
+agent = build_programmer(settings)
 result = await agent.run("Show all employees in Engineering department", deps=deps)
 ```
 
-The orchestrator sees your registered functions, the coder writes sandbox code calling them, and the sandbox executes against your real database.
+The programmer agent sees your registered functions, negotiates requirements with you, then the coder writes sandbox code calling them, and the sandbox executes against your real database.
 
 ## Program Reuse
 
@@ -294,11 +293,8 @@ All prefixed with `CODE_FACTORY_` (supports `.env` file):
 | `DEEPSEEK_API_KEY` | — | Required for `deepseek` provider |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | DeepSeek API endpoint |
 | `QWEN_BASE_URL` | `http://localhost:8082/v1` | Qwen endpoint |
-| `MODEL_ORCHESTRATOR` | (from preset) | Override per-role model |
-| `MODEL_RESEARCHER` | (from preset) | Override per-role model |
-| `MODEL_CODER` | (from preset) | Override per-role model |
-| `MODEL_REVIEWER` | (from preset) | Override per-role model |
-| `MODEL_TEST_WRITER` | (from preset) | Override per-role model |
+| `MODEL_MAIN` | (from preset) | Override programmer agent model |
+| `MODEL_SUB` | (from preset) | Override coder/test_writer model |
 
 ### Provider presets
 
@@ -344,11 +340,10 @@ src/code_factory/
 ├── main.py                    # CLI entry, argparse, REPL loop
 ├── config.py                  # Settings, provider presets, model resolution
 ├── agents/
-│   ├── orchestrator.py        # Main agent, pipeline tools, code verification
-│   ├── researcher.py          # Requirement analysis agent
-│   ├── coder.py               # Monty code generation agent
-│   ├── test_writer.py         # Test generation agent
-│   └── reviewer.py            # Output review agent
+│   ├── programmer.py          # Main agent with human-in-the-loop tools
+│   ├── code_utils.py          # Shared utilities (code verification, cleanup)
+│   ├── coder.py               # Monty code generation sub-agent
+│   └── test_writer.py         # Test generation sub-agent
 ├── sandbox/
 │   ├── registry.py            # Host function decorator + registry
 │   ├── host_functions.py      # Default Faker-based implementations (22 functions)
@@ -385,7 +380,7 @@ code-factory uses budget-based compaction:
 - **Token overflow**: Complex tool calls with large data payloads can exceed model's max_tokens — increase via `CODE_FACTORY_MAX_TOKENS`
 - **Faker data**: Default host functions return synthetic data. Same input key always produces same fake data (deterministic seeding)
 - **Sandbox restrictions**: No network access, no filesystem, no third-party imports inside sandbox. All data must flow through host functions
-- **Allowlist mismatch**: If the orchestrator picks wrong host functions, auto-expand in `_verify_code` catches and adds missing ones
+- **Allowlist mismatch**: If the programmer picks wrong host functions, auto-expand in `verify_code` catches and adds missing ones
 - **Human input functions**: `ask_*` functions pause sandbox via snapshot loop — only works in interactive mode (TTY)
 
 ## License

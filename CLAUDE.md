@@ -6,7 +6,7 @@ code-factory: TUI coding harness using Pydantic AI + Pydantic Monty. Takes natur
 
 ## Model Serving
 
-Finetuned Qwen3-4B (Q4_K_M) via llama.cpp server.
+Finetuned Qwen3-4B-Instruct-2507 (Q4_K_M) via llama.cpp server.
 
 ```bash
 ./serve.sh  # defaults below
