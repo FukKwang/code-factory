@@ -65,6 +65,10 @@ Two Python virtualenvs exist for finetuning. **Always use `.venv-train`** for tr
 
 Run training: `.venv-train/bin/python3 scripts/finetune.py`
 
+## Finetuning
+
+See [EXPERIMENTS.md](EXPERIMENTS.md) for full experiment log: training rounds, test results, known failure patterns.
+
 ## Key Paths
 
 - Source: `src/code_factory/`
