@@ -273,3 +273,53 @@ Model skips search_vault, goes to list_functions→generate_code. Fails at ALL e
 
 ### C4: ask_human loop on affirmative (all R5 epochs — mitigated by cap)
 "yes try again" triggers 11-12x ask_human loop at every R5 epoch. **Mitigated**: ask_human capped at 3 calls in agent code. R6 ep2 showed 0x ask_human (passes C4 but breaks everything else), confirming this is best solved in code.
+
+## Agent-Level Test Results — 2026-09-19
+
+### Motivation
+
+Raw API test suite (10 scenarios) tests model tool-call behavior in isolation. Agent-level tests validate full loop: system prompt, tool routing, control-flow guards (ask_human cap, vault guard), and multi-turn conversation through actual `programmer` agent.
+
+### Method
+
+`scripts/test_agent.py` — runs programmer agent with `ScriptedInput` (patches `builtins.input`) for non-interactive testing. Each scenario gets fresh vault + temp dir. 6 scenarios tested:
+
+| ID | Scenario | Validates |
+|----|----------|-----------|
+| S1 | Full flow (new report) | generate_code produces ticket |
+| S2 | Vault reuse (pre-populated) | search_vault or vault guard intercepts before generate_code |
+| S3 | Vague request | ask_human called 1-3x for clarification |
+| S4 | Iterate existing ticket | iterate_code called (not generate_code) |
+| C2 | Impossible then pivot | ask_human <=3x, pivots to feasible task |
+| C4 | Error recovery | ask_human capped at 3 (was 11-12x without cap) |
+
+S2 test pre-populates vault with an APPROVED ticket (`Payment History Report`, `query_payments` function) before running.
+
+### Control-Flow Fixes Tested
+
+1. **generate_code vault guard**: If `search_vault` not already called, auto-searches vault before generating. Returns reusable matches with "WAIT" message if found.
+2. **search_vault tracking**: `_used_tools["search_vault"]` incremented on each call, used by vault guard.
+3. **ask_human cap (3)**: Returns "proceed with information you have" after 3rd call.
+4. **System prompt rules**: vault-first for retrieval requests, iterate_code for ticket references, proceed on affirmative replies.
+
+### Results
+
+| Test | Result | Detail |
+|------|--------|--------|
+| S1 | PASS | Ticket created |
+| S2 | PASS | Vault guard intercepted generate_code, found existing ticket |
+| S3 | PASS | ask_human 1-2x |
+| S4 | PASS | iterate_code called |
+| C2 | PASS | ask_human <=3x, pivoted |
+| C4 | PASS | ask_human capped at 3 |
+
+**6/6 passed.** Control-flow fixes fully mitigate S2 and C4 failures that persist at raw model level.
+
+### Summary
+
+| Level | Score | S2 | C4 |
+|-------|-------|----|----|
+| Raw API (model only) | 8/10 | FAIL | FAIL |
+| Agent (with fixes) | 6/6 | PASS | PASS |
+
+Production deployment: R5 epoch 2 (checkpoint-144) + control-flow guards = all tested scenarios passing.

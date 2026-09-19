@@ -112,6 +112,7 @@ Available host functions:
     @agent.tool
     async def search_vault(ctx: RunContext[FactoryDeps], query: str) -> str:
         """Search vault for existing reusable programs. Returns matching tickets with their IDs and titles."""
+        ctx.deps._used_tools["search_vault"] = ctx.deps._used_tools.get("search_vault", 0) + 1
         vault = ctx.deps.vault
         results = vault.search(query)
         reusable = [r for r in results if r.status in (
@@ -156,6 +157,15 @@ Available host functions:
                             runtime_inputs: dict[str, str] | None = None) -> str:
         """Generate, test, and run a new program. Provide a precise spec, only the specific host functions needed (NOT all of them), input schema for parameters, and runtime input values for this run."""
         vault = ctx.deps.vault
+        if "search_vault" not in ctx.deps._used_tools:
+            ctx.deps._used_tools["search_vault"] = 1
+            results = vault.search(spec)
+            reusable = [r for r in results if r.status in (
+                TicketStatus.APPROVED, TicketStatus.CLOSED, TicketStatus.REUSED)]
+            if reusable:
+                lines = [f"- {r.id}: {r.title} (functions: {', '.join(r.host_functions)}, inputs: {', '.join(r.input_keys)})"
+                         for r in reusable[:3]]
+                return f"WAIT — found existing programs in vault before generating new code:\n" + "\n".join(lines) + "\nCall run_existing to reuse one, or call generate_code again to create new."
         valid = [f for f in host_functions if f in host_descs] or fn_names
         limits = ctx.deps.settings.sandbox.clamp()
 
