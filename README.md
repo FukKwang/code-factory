@@ -365,7 +365,7 @@ src/code_factory/
 ├── sandbox/
 │   ├── registry.py            # Host function decorator + registry
 │   ├── host_functions.py      # Default Faker-based implementations (22 functions)
-│   └── runner.py              # Monty session wrapper, test runner, fallback exec
+│   └── runner.py              # Monty session wrapper, test runner
 ├── context/
 │   └── manager.py             # Token estimation, history compaction
 └── vault/
