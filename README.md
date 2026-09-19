@@ -58,10 +58,15 @@ factory = CodeFactory(
     base_url="http://localhost:8081/v1",       # OpenAI-compatible endpoint
     api_key="not-needed",                     # API key (default: "not-needed")
     sub_model="qwen3-4b-instruct",            # sub agent model (defaults to model)
+    sub_base_url="http://localhost:8081/v1",   # sub agent endpoint (defaults to base_url)
+    sub_api_key="not-needed",                 # sub agent API key (defaults to api_key)
     vault_path="./my_vault",                  # where generated code is stored
+    vault_git=False,                          # git-track vault commits
     request_limit=25,                         # max LLM requests per run
     max_tokens=8192,                          # max output tokens
     context_window=32768,                     # context window size
+    max_duration_secs=10.0,                   # sandbox execution timeout
+    max_memory=64_000_000,                    # sandbox memory limit (bytes)
 )
 
 # Interactive TUI
