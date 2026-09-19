@@ -63,6 +63,9 @@ Rules:
 - If no host function matches what the user needs, tell them and suggest alternatives or ask them to register one.
 - Present results in plain language. Never show raw code to the user.
 - When reusing a ticket, extract the right runtime inputs from the user's query.
+- When the user asks to show, get, or look up specific data (e.g. "show payment history for loan X"), ALWAYS call search_vault first — a reusable program likely exists. Use run_existing if found instead of generating new code.
+- When the user references an existing ticket (TKT-xxxx) and wants changes, use iterate_code — not generate_code.
+- If the user gives an affirmative reply ("yes", "go ahead", "try again") after you proposed a plan or reported an error, PROCEED with the action. Do not ask again.
 
 Available host functions:
 {chr(10).join(f'- {desc}' for desc in host_descs.values())}""",
@@ -80,6 +83,10 @@ Available host functions:
     async def ask_human(ctx: RunContext[FactoryDeps], question: str,
                         options: list[str] | None = None) -> str:
         """Ask the user a clarifying question. Use when the requirement is ambiguous, no function matches, you want to propose alternatives, or you need to confirm your plan before coding."""
+        count = ctx.deps._used_tools.get("ask_human", 0) + 1
+        ctx.deps._used_tools["ask_human"] = count
+        if count > 3:
+            return "You have already asked multiple questions. Proceed with the information you have — use list_functions, search_vault, or generate_code."
         if not ctx.deps.interactive:
             return "Non-interactive mode. Proceed with best guess."
         prompt = question

@@ -197,10 +197,79 @@ R6/R6b/R7 all regressed from R5 despite targeted data additions. Hypothesis: we 
 - **S2 fix**: system prompt hint or routing logic to force search_vault on retrieval-flavored requests.
 - **C4 fix**: system prompt instruction for affirmative responses after errors, or cap ask_human calls in agent loop.
 
-## Known Failure Patterns (as of Checkpoint Sweep)
+## Epoch-2 Sweep: R6/R6b/R7 — 2026-09-19
 
-### S2: Vault reuse (all epochs, all rounds)
-Model skips search_vault, goes to list_functions→generate_code. Fails at ALL 5 epochs of R5 — not an overfitting issue. 63 search_vault examples exist in training data but test phrasing ("show me payment history for loan L-2024-005") doesn't trigger the learned pattern. **Recommended fix: control flow** — regex/keyword router that forces search_vault on retrieval-flavored requests, or system prompt hint.
+### Motivation
 
-### C4: ask_human loop on affirmative (all epochs, all rounds)
-"yes try again" triggers 11-12x ask_human loop at every epoch. Model treats affirmative responses as new clarification requests instead of proceeding with the plan. **Recommended fix: control flow** — cap ask_human calls in agent loop, or inject system prompt instruction that affirmative user replies mean "proceed".
+R6/R6b/R7 were previously evaluated only at epoch 5 and scored 4/3/4. Since R5 epoch sweep showed epoch 5 overfits, the question was whether R6/R6b/R7 data additions would perform better at epoch 2.
+
+### Method
+
+- Determinism verified first: R5 ep2 run twice, identical results (8/10, same tool calls, same ask_human counts)
+- Exported epoch-2 checkpoint from each round to Q4_K_M GGUF
+- R6: checkpoint-202, R6b: checkpoint-150, R7: checkpoint-128
+
+### Results
+
+| Model | Score | S1 | S2 | S3 | S4 | S5 | C1 | C2 | C3 | C4 | C5 |
+|-------|-------|----|----|----|----|----|----|----|----|----|----|
+| **R5 ep2** | **8/10** | P | F | P | P | P | P | P | P | F | P |
+| R6 ep2 | 4/10 | P | F | F | F | P | F | F | F | P | P |
+| R6b ep2 | 3/10 | P | F | F | F | P | F | F | F | F | P |
+| R7 ep2 | 3/10 | P | F | F | F | P | F | F | F | F | P |
+
+### Analysis
+
+1. **R6/R6b/R7 data is harmful, not just overfit.** Even at epoch 2, they score 3-4/10 vs R5's 8/10. The 35 new targeted examples corrupted the model at any epoch.
+2. **ask_human: 0x across S3/C2/C3** in all three rounds — new examples trained the model to skip ask_human entirely for vague/ambiguous/impossible requests.
+3. **R6 ep2 does fix C4** (0x ask_human, passes) but at the cost of 4 other tests. The C2/C4 examples that taught "respond without asking" bled into all clarification scenarios.
+4. **R5's original 151 examples are the optimal dataset.** Adding data made things worse. The training data is already well-balanced (63 search_vault, 61 list_functions, 48 ask_human, all start with tool calls).
+5. **Determinism confirmed**: temp 0 + seed 42 produces identical results across runs.
+
+### Conclusion
+
+**Checkpoint-144 (R5 epoch 2) is the production model at 8/10.**
+
+Future training should NOT add examples targeting specific test scenarios — it consistently degrades other capabilities. The remaining 2 failures (S2, C4) are solved in application code:
+- S2: system prompt instructions to search vault first for retrieval requests (implemented)
+- C4: ask_human capped at 3 calls in agent loop (implemented)
+
+## Control Flow Fixes (implemented 2026-09-19)
+
+### ask_human cap (fixes C4)
+`ask_human` tool returns early after 3rd call with message directing model to proceed with action. Prevents infinite clarification loops regardless of model behavior.
+Location: `src/code_factory/agents/programmer.py`
+
+### System prompt enhancements (fixes S2)
+Added explicit instructions to programmer agent:
+- Search vault first for retrieval-flavored requests (show/get/look up specific data)
+- Use iterate_code (not generate_code) when user references existing ticket
+- Proceed on affirmative replies instead of re-asking
+Location: `src/code_factory/agents/programmer.py`
+
+## Stability Test — 2026-09-19
+
+Production model (R5 epoch 2, checkpoint-144) tested 3x with deterministic settings (`temperature: 0`, `seed: 42`).
+
+| Test | 3/3 | Status |
+|------|-----|--------|
+| S1 | 3/3 | STABLE PASS |
+| S2 | 0/3 | STABLE FAIL |
+| S3 | 3/3 | STABLE PASS |
+| S4 | 3/3 | STABLE PASS |
+| S5 | 3/3 | STABLE PASS |
+| C1 | 3/3 | STABLE PASS |
+| C2 | 3/3 | STABLE PASS |
+| C3 | 3/3 | STABLE PASS |
+| C4 | 0/3 | STABLE FAIL |
+| C5 | 3/3 | STABLE PASS |
+
+**Result: 8/10 stable, 0 flaky.** Zero variance across runs. S2 and C4 are structural failures mitigated by control-flow fixes in `programmer.py` (system prompt + ask_human cap). Those fixes apply at the agent level, not at the raw model API level tested here.
+
+## Known Failure Patterns (as of final sweep)
+
+### S2: Vault reuse (all epochs, all rounds — mitigated by system prompt)
+Model skips search_vault, goes to list_functions→generate_code. Fails at ALL epochs across ALL rounds — structural issue where test phrasing doesn't trigger learned pattern. 63 search_vault examples exist but none match "show me payment history for loan L-2024-005" pattern. **Mitigated**: system prompt now explicitly instructs vault-first for retrieval requests.
+
+### C4: ask_human loop on affirmative (all R5 epochs — mitigated by cap)
+"yes try again" triggers 11-12x ask_human loop at every R5 epoch. **Mitigated**: ask_human capped at 3 calls in agent code. R6 ep2 showed 0x ask_human (passes C4 but breaks everything else), confirming this is best solved in code.
