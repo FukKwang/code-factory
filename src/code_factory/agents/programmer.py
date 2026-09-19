@@ -33,7 +33,8 @@ class FactoryDeps:
     _used_tools: dict[str, int] = field(default_factory=dict)
 
 
-def build_programmer(settings: Settings | None = None) -> Agent[FactoryDeps, str]:
+def build_programmer(settings: Settings | None = None, *,
+                     model_main=None, model_sub=None) -> Agent[FactoryDeps, str]:
     if settings is None:
         settings = get_settings()
 
@@ -43,7 +44,7 @@ def build_programmer(settings: Settings | None = None) -> Agent[FactoryDeps, str
     ms = ModelSettings(max_tokens=settings.max_tokens)
 
     agent: Agent[FactoryDeps, str] = Agent(
-        resolve_model(settings.model_main, settings),
+        model_main or resolve_model(settings.model_main, settings),
         deps_type=FactoryDeps,
         model_settings=ms,
         instructions=f"""You are a programmer. Users describe what they want in natural language. Your job is to understand, clarify, and build it.
@@ -72,8 +73,8 @@ Available host functions:
         name="programmer",
     )
 
-    coder = build_coder(settings)
-    test_writer = build_test_writer(settings)
+    coder = build_coder(settings, model=model_sub)
+    test_writer = build_test_writer(settings, model=model_sub)
 
     async def _llm_call(sub_agent: Agent, prompt: str) -> str:
         r = await asyncio.wait_for(sub_agent.run(prompt), timeout=120)

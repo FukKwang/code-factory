@@ -51,18 +51,26 @@ code-factory -m "openai-chat:my-model"
 ### As a library
 
 ```python
+from code_factory import CodeFactory
+
+factory = CodeFactory(
+    model="qwen3-4b-instruct",               # main agent model name
+    base_url="http://localhost:8081/v1",       # OpenAI-compatible endpoint
+    api_key="not-needed",                     # API key (default: "not-needed")
+    sub_model="qwen3-4b-instruct",            # sub agent model (defaults to model)
+    vault_path="./my_vault",                  # where generated code is stored
+    request_limit=25,                         # max LLM requests per run
+    max_tokens=8192,                          # max output tokens
+    context_window=32768,                     # context window size
+)
+
+# Interactive TUI
+factory.run()
+
+# Or programmatic
 import asyncio
-from code_factory.config import Settings
-from code_factory.agents.programmer import build_programmer, FactoryDeps
-from code_factory.vault.manager import VaultManager
-
-settings = Settings(vault_path="./my_vault")
-vault = VaultManager(settings.vault_path)
-deps = FactoryDeps(vault=vault, settings=settings)
-agent = build_programmer(settings)
-
-result = asyncio.run(agent.run("Show loans for borrower Ahmad", deps=deps))
-print(result.output)
+result = asyncio.run(factory.ask("Show loans for borrower Ahmad"))
+print(result)
 ```
 
 ## Architecture
@@ -118,23 +126,39 @@ Two model tiers:
 | **Coder** | sub (`model_sub`) | Writes Monty-safe Python from precise spec + tests |
 | **Test Writer** | sub (`model_sub`) | Generates assert statements for `result` variable |
 
-Configure via `CODE_FACTORY_MODEL_MAIN` and `CODE_FACTORY_MODEL_SUB` env vars.
+Configure via `CodeFactory(model=..., sub_model=...)` or env vars `CODE_FACTORY_MODEL_MAIN` / `CODE_FACTORY_MODEL_SUB`.
 
 ## Host Functions
 
 Generated code accesses data **only** through host functions. No raw database queries or API calls in sandboxed code.
 
-### Registry pattern
+### With CodeFactory (recommended)
 
-Register custom host functions via decorator — no source editing needed:
+```python
+from code_factory import CodeFactory
+
+factory = CodeFactory(model="qwen3-4b-instruct", base_url="http://localhost:8081/v1")
+
+@factory.host_function("get_customer",
+    "get_customer({'id': str}) -> dict: customer profile from CRM")
+def get_customer(args_dict: dict) -> dict:
+    return db.query("SELECT * FROM customers WHERE id = %s", args_dict["id"])
+
+@factory.host_function("get_orders",
+    "get_orders({'customer_id': str}) -> list[dict]: order history")
+def get_orders(args_dict: dict) -> list:
+    return db.query("SELECT * FROM orders WHERE customer_id = %s", args_dict["customer_id"])
+
+factory.run()
+```
+
+### Standalone registry (advanced)
 
 ```python
 from code_factory import register_host_function, clear_registry
 
-# Remove default Faker functions
 clear_registry()
 
-# Register your own
 @register_host_function(
     "get_customer",
     "get_customer({'id': str}) -> dict: customer profile from CRM"
@@ -143,16 +167,9 @@ def get_customer(args_dict: dict) -> dict:
     return db.query("SELECT * FROM customers WHERE id = %s", args_dict["id"])
 
 @register_host_function(
-    "get_orders",
-    "get_orders({'customer_id': str}) -> list[dict]: order history"
-)
-def get_orders(args_dict: dict) -> list:
-    return db.query("SELECT * FROM orders WHERE customer_id = %s", args_dict["customer_id"])
-
-@register_host_function(
     "ask_date_range",
     "ask_date_range({'prompt': str}) -> str: ask user for date range",
-    human_input=True,  # pauses sandbox for user input
+    human_input=True,
 )
 def ask_date_range(args_dict: dict) -> str:
     return args_dict.get("prompt", "")
@@ -198,39 +215,35 @@ Included as reference implementation for development/testing:
 ### Example: real database host functions
 
 ```python
-from code_factory import register_host_function, clear_registry
+from code_factory import CodeFactory
 import psycopg2
-
-clear_registry()
 
 conn = psycopg2.connect("postgresql://user:pass@localhost/mydb")
 
-@register_host_function(
-    "query_employee",
-    "query_employee({'name': str}) -> dict: employee_id, name, department, salary, hire_date"
+factory = CodeFactory(
+    model="qwen3-4b-instruct",
+    base_url="http://localhost:8081/v1",
+    vault_path="./hr_vault",
 )
+
+@factory.host_function("query_employee",
+    "query_employee({'name': str}) -> dict: employee_id, name, department, salary, hire_date")
 def query_employee(args_dict: dict) -> dict:
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT * FROM employees WHERE name ILIKE %s LIMIT 1", (args_dict["name"],))
     return dict(cur.fetchone() or {})
 
-@register_host_function(
-    "query_team_members",
-    "query_team_members({'department': str}) -> list[dict]: employees in department"
-)
+@factory.host_function("query_team_members",
+    "query_team_members({'department': str}) -> list[dict]: employees in department")
 def query_team_members(args_dict: dict) -> list:
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute("SELECT * FROM employees WHERE department = %s", (args_dict["department"],))
     return [dict(r) for r in cur.fetchall()]
+
+factory.run()
 ```
 
-Then run:
-```python
-agent = build_programmer(settings)
-result = await agent.run("Show all employees in Engineering department", deps=deps)
-```
-
-The programmer agent sees your registered functions, negotiates requirements with you, then the coder writes sandbox code calling them, and the sandbox executes against your real database.
+The programmer agent sees registered functions, negotiates requirements, then the coder writes sandbox code calling them against your real database.
 
 ## Program Reuse
 
@@ -336,7 +349,7 @@ Generated code runs in Pydantic Monty with these constraints:
 
 ```
 src/code_factory/
-├── __init__.py                # exports: register_host_function, clear_registry
+├── __init__.py                # exports: CodeFactory, register_host_function, clear_registry
 ├── main.py                    # CLI entry, argparse, REPL loop
 ├── config.py                  # Settings, provider presets, model resolution
 ├── agents/
@@ -377,7 +390,7 @@ code-factory uses budget-based compaction:
 ## Edge Cases and Limitations
 
 - **Model quality**: Small models (4B params) may struggle with complex multi-hop queries or produce vague answers for ambiguous requests
-- **Token overflow**: Complex tool calls with large data payloads can exceed model's max_tokens — increase via `CODE_FACTORY_MAX_TOKENS`
+- **Token overflow**: Complex tool calls with large data payloads can exceed model's max_tokens — increase via `CodeFactory(max_tokens=...)` or `CODE_FACTORY_MAX_TOKENS`
 - **Faker data**: Default host functions return synthetic data. Same input key always produces same fake data (deterministic seeding)
 - **Sandbox restrictions**: No network access, no filesystem, no third-party imports inside sandbox. All data must flow through host functions
 - **Allowlist mismatch**: If the programmer picks wrong host functions, auto-expand in `verify_code` catches and adds missing ones

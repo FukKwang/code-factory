@@ -4,11 +4,11 @@ from pydantic_ai.settings import ModelSettings
 from ..config import Settings, get_settings, resolve_model
 
 
-def build_test_writer(settings: Settings | None = None) -> Agent:
+def build_test_writer(settings: Settings | None = None, *, model=None) -> Agent:
     if settings is None:
         settings = get_settings()
     return Agent(
-        resolve_model(settings.model_sub, settings),
+        model or resolve_model(settings.model_sub, settings),
         output_type=str,
         model_settings=ModelSettings(max_tokens=min(settings.max_tokens, 2048)),
         instructions="""\
