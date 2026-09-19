@@ -34,7 +34,7 @@ def build_coder(settings: Settings | None = None, *, model=None) -> Agent:
     return Agent(
         model or resolve_model(settings.model_sub, settings),
         output_type=str,
-        model_settings=ModelSettings(max_tokens=min(settings.max_tokens, 2048)),
+        model_settings=ModelSettings(max_tokens=min(settings.max_tokens, 2048), temperature=0.3),
         instructions=MONTY_LIMITATIONS,
         name="coder",
     )

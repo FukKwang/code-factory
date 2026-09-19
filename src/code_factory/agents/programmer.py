@@ -19,6 +19,7 @@ from .code_utils import (
     syntax_check,
     verify_code,
     verify_tests,
+    with_remediation,
 )
 from .coder import build_coder
 from .test_writer import build_test_writer
@@ -76,9 +77,16 @@ Available host functions:
     coder = build_coder(settings, model=model_sub)
     test_writer = build_test_writer(settings, model=model_sub)
 
-    async def _llm_call(sub_agent: Agent, prompt: str) -> str:
+    async def _llm_call_raw(sub_agent: Agent, prompt: str) -> str:
         r = await asyncio.wait_for(sub_agent.run(prompt), timeout=120)
         return r.output
+
+    @with_remediation(retries=1, post=lambda code: syntax_check(clean_llm_code(code)))
+    async def _llm_code(prompt: str) -> str:
+        return await _llm_call_raw(coder, prompt)
+
+    async def _llm_tests(prompt: str) -> str:
+        return await _llm_call_raw(test_writer, prompt)
 
     @agent.tool
     async def ask_human(ctx: RunContext[FactoryDeps], question: str,
@@ -191,55 +199,42 @@ Available host functions:
         if schema_doc:
             test_prompt += f"Code reads parameters from `inputs` dict:\n{schema_doc}\nTests can assume `inputs` is populated. Test `result` structure.\n\n"
         test_prompt += "Write assert statements to validate `result`. Return only code."
-        test_code = clean_llm_code(await _llm_call(test_writer, test_prompt))
+        test_code = clean_llm_code(await _llm_tests(test_prompt))
         test_code, _ = verify_tests(test_code)
         vault.write_stage_file(ticket_id, "test_solution.py", test_code)
         ticket.status = TicketStatus.TESTS_DRAFTED
         vault.save_ticket(ticket)
         vault.commit(ticket_id, "generate tests")
 
-        # Generate code
+        # Generate code (syntax retry handled by decorator)
         status("💻", "writing solution...")
         code_prompt = f"Spec:\n{spec}\n\nTests your code must pass:\n{test_code}\n\nHost functions:\n{func_doc}\n\n"
         if schema_doc:
             code_prompt += f"Runtime parameters available in `inputs` dict:\n{schema_doc}\nRead ALL request-specific values from inputs[\"key\"]. Never hardcode them.\n\n"
         code_prompt += "Return only Python code."
-        code = clean_llm_code(await _llm_call(coder, code_prompt))
+        code = clean_llm_code(await _llm_code(code_prompt))
         code, _ = verify_code(code, ticket.host_function_allowlist, spec, input_schema)
         vault.write_stage_file(ticket_id, "solution.py", code)
         ticket.status = TicketStatus.CODE_DRAFTED
         vault.save_ticket(ticket)
         vault.commit(ticket_id, "generate code")
 
-        # Syntax check + test + retry
-        MAX_RETRIES = 1
+        # Test + retry (syntax already clean from decorator)
         test_result = None
-        for attempt in range(MAX_RETRIES + 1):
-            syntax_err = syntax_check(code)
-            if syntax_err and attempt < MAX_RETRIES:
-                status("🔧", f"syntax error, retrying: {syntax_err}")
-                code = clean_llm_code(await _llm_call(coder,
-                    f"This code has a syntax error: {syntax_err}\n\n{code}\n\nFix the error. Return only Python code."))
-                code, _ = verify_code(code, ticket.host_function_allowlist, spec, input_schema)
-                vault.write_stage_file(ticket_id, "solution.py", code)
-                vault.commit(ticket_id, f"syntax fix attempt {attempt + 1}")
-                continue
-            if syntax_err:
-                return f"{ticket_id} FAILED: syntax error: {syntax_err[:100]}"
-
+        for attempt in range(2):
             status("🧪", "running tests...")
             test_result = run_tests(code, test_code, ticket.host_function_allowlist, test_inputs, limits=limits)
             if test_result.passed:
                 status("✅", "tests passed")
                 break
             status("❌", f"tests failed: {'; '.join(test_result.failures[:2])}")
-            if attempt < MAX_RETRIES:
+            if attempt < 1:
                 status("🔧", "retrying with error feedback...")
-                code = clean_llm_code(await _llm_call(coder,
+                code = clean_llm_code(await _llm_code(
                     f"Code failed tests.\nError: {'; '.join(test_result.failures[:3])}\n\nCode:\n{code}\n\nTests:\n{test_code}\n\nHost functions:\n{func_doc}\n\nFix the code to pass tests. Return only Python code."))
                 code, _ = verify_code(code, ticket.host_function_allowlist, spec, input_schema)
                 vault.write_stage_file(ticket_id, "solution.py", code)
-                vault.commit(ticket_id, f"test fix attempt {attempt + 1}")
+                vault.commit(ticket_id, "test fix")
 
         # Run solution
         status("▶️", "executing solution...")
@@ -278,7 +273,7 @@ Available host functions:
         status("🔄", f"iterating {ticket_id}: {feedback[:60]}")
 
         # Update tests
-        new_test_code = clean_llm_code(await _llm_call(test_writer,
+        new_test_code = clean_llm_code(await _llm_tests(
             f"Original spec:\n{spec[:300]}\nFeedback:\n{feedback}\n"
             f"Current tests:\n{test_code}\nHost functions:\n{func_doc}\n"
             + (f"Input parameters:\n{schema_doc}\n" if schema_doc else "")
@@ -286,8 +281,8 @@ Available host functions:
         new_test_code, _ = verify_tests(new_test_code)
         vault.write_stage_file(ticket_id, "test_solution.py", new_test_code)
 
-        # Update code
-        code = clean_llm_code(await _llm_call(coder,
+        # Update code (syntax retry handled by decorator)
+        code = clean_llm_code(await _llm_code(
             f"Modify code. Keep requirements.\nSpec:\n{spec[:300]}\nCode:\n{current_code}\n"
             f"Feedback:\n{feedback}\nTests to pass:\n{new_test_code}\nHost functions:\n{func_doc}\n"
             + (f"Input parameters in `inputs` dict:\n{schema_doc}\n" if schema_doc else "")
