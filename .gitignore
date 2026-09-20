@@ -8,4 +8,4 @@ models/
 unsloth_compiled_cache/
 training_data/
 scripts/
-vault/
+/vault/

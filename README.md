@@ -8,7 +8,7 @@ Think of it as a junior developer that writes, tests, and version-controls small
 
 - **Multi-agent TDD pipeline** — Researcher, Test Writer, Coder, and Reviewer collaborate under an Orchestrator
 - **Sandboxed execution** — Code runs in Pydantic Monty (restricted Python), never on host
-- **Git-tracked vault** — Every ticket, spec, test, solution, and run is committed automatically
+- **Pluggable vault storage** — Filesystem (with optional git tracking) or SQLite backend, with bidirectional migration
 - **Reusable programs** — Tickets are parameterized; asking a similar question reuses existing code with new inputs
 - **Pluggable host functions** — Register custom data sources via decorator, no source editing needed
 - **KV cache optimization** — Budget-based compaction preserves LLM server's KV cache prefix between turns
@@ -61,7 +61,8 @@ factory = CodeFactory(
     sub_base_url="http://localhost:8081/v1",   # sub agent endpoint (defaults to base_url)
     sub_api_key="not-needed",                 # sub agent API key (defaults to api_key)
     vault_path="./my_vault",                  # where generated code is stored
-    vault_git=False,                          # git-track vault commits
+    vault_backend="filesystem",               # "filesystem" or "sqlite"
+    vault_fs_git=False,                       # git-track vault (filesystem only)
     request_limit=25,                         # max LLM requests per run
     max_tokens=8192,                          # max output tokens
     context_window=32768,                     # context window size
@@ -277,7 +278,7 @@ NEW → GATHERING → SPEC_DRAFTED → TESTS_DRAFTED → CODE_DRAFTED
                                                       REUSED
 ```
 
-Every state transition creates a git commit in the vault.
+Every state transition is persisted in the vault. With the filesystem backend and `vault_fs_git=True`, each transition creates a git commit.
 
 ## Code Verification
 
@@ -306,7 +307,9 @@ All prefixed with `CODE_FACTORY_` (supports `.env` file):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PROVIDER` | `ling` | Provider preset name |
-| `VAULT_PATH` | `./vault` | Git vault directory (relative to working directory) |
+| `VAULT_PATH` | `./vault` | Vault directory (relative to working directory) |
+| `VAULT_BACKEND` | `filesystem` | Storage backend: `filesystem` or `sqlite` |
+| `VAULT_FS_GIT` | `false` | Git-track vault (filesystem backend only) |
 | `OPENAI_BASE_URL` | `http://localhost:8081/v1` | Default OpenAI-compatible endpoint |
 | `DEEPSEEK_API_KEY` | — | Required for `deepseek` provider |
 | `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | DeepSeek API endpoint |
@@ -322,11 +325,15 @@ All prefixed with `CODE_FACTORY_` (supports `.env` file):
 | `deepseek` | `deepseek:deepseek-flash` | `api.deepseek.com` | 8192 |
 | `qwen` | `qwen:qwen3-59b` | `localhost:8082/v1` | 32768 |
 
-## Vault Structure
+## Vault Storage
+
+Two storage backends, switchable via `vault_backend`:
+
+### Filesystem (default)
 
 ```
 vault/
-├── .git/
+├── .git/                      # optional (vault_fs_git=True)
 ├── registry.json              # search index
 └── tickets/
     └── TICKET-001/
@@ -337,6 +344,32 @@ vault/
         └── runs/
             ├── research.md    # researcher findings
             └── run_001.json   # {inputs, output, success, error, timestamp}
+```
+
+### SQLite
+
+```
+vault/vault.db                 # single file, 3 tables: tickets, stage_files, runs
+```
+
+Set via env `CODE_FACTORY_VAULT_BACKEND=sqlite` or `CodeFactory(vault_backend="sqlite")`.
+
+### Migration
+
+Migrate data between backends:
+
+```python
+from code_factory.vault.manager import VaultManager
+from code_factory.vault.sqlite import SqliteVaultManager
+from code_factory.vault.migrate import migrate
+
+# filesystem -> sqlite
+source = VaultManager(Path("./vault"))
+dest = SqliteVaultManager(Path("./vault.db"))
+migrated_ids = migrate(source, dest)
+
+# sqlite -> filesystem (works both ways)
+migrate(dest, VaultManager(Path("./new_vault")))
 ```
 
 ## Monty Sandbox Rules
@@ -369,8 +402,11 @@ src/code_factory/
 ├── context/
 │   └── manager.py             # Token estimation, history compaction
 └── vault/
+    ├── storage.py             # VaultStorage ABC
     ├── models.py              # Ticket, TicketStatus, RunRecord, TicketSummary
-    └── manager.py             # Git-backed CRUD, search (text + structural), git ops
+    ├── manager.py             # Filesystem backend (git-tracked CRUD, search)
+    ├── sqlite.py              # SQLite backend
+    └── migrate.py             # Bidirectional migration between backends
 ```
 
 ## KV Cache Optimization

@@ -6,10 +6,13 @@ from pathlib import Path
 
 import yaml
 
-from .models import RunRecord, StructuralMatch, Ticket, TicketStatus, TicketSummary
+from .models import RunRecord, StructuralMatch, Ticket, TicketSummary
+from .storage import VaultStorage
 
 
-class VaultManager:
+class VaultManager(VaultStorage):
+    """Filesystem-backed vault storage with optional git tracking."""
+
     def __init__(self, root: Path, git_enabled: bool = False):
         self.root = root
         self.git_enabled = git_enabled
@@ -95,6 +98,36 @@ class VaultManager:
         existing = list(runs_dir.glob("run_*.json"))
         n = len(existing) + 1
         (runs_dir / f"run_{n:03d}.json").write_text(record.model_dump_json(indent=2))
+
+    def get_latest_run(self, ticket_id: str) -> dict | None:
+        runs_dir = self.ticket_dir(ticket_id) / "runs"
+        if not runs_dir.exists():
+            return None
+        run_files = sorted(runs_dir.glob("run_*.json"), reverse=True)
+        if not run_files:
+            return None
+        return json.loads(run_files[0].read_text())
+
+    def list_tickets(self) -> list[str]:
+        if not self.tickets_dir.exists():
+            return []
+        return sorted(
+            p.name for p in self.tickets_dir.iterdir()
+            if p.is_dir() and p.name.startswith("TICKET-")
+        )
+
+    def list_stage_files(self, ticket_id: str) -> list[str]:
+        d = self.ticket_dir(ticket_id)
+        if not d.exists():
+            return []
+        skip = {"ticket.yaml", "runs"}
+        return sorted(f.name for f in d.iterdir() if f.is_file() and f.name not in skip)
+
+    def list_runs(self, ticket_id: str) -> list[dict]:
+        runs_dir = self.ticket_dir(ticket_id) / "runs"
+        if not runs_dir.exists():
+            return []
+        return [json.loads(f.read_text()) for f in sorted(runs_dir.glob("run_*.json"))]
 
     def commit(self, ticket_id: str, message: str):
         if not self.git_enabled:

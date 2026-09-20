@@ -51,7 +51,8 @@ See README.md for full examples.
 
 | Setting | Default | Env var | Notes |
 |---------|---------|---------|-------|
-| `vault_git` | `false` | `CODE_FACTORY_VAULT_GIT` | Enable git tracking in vault |
+| `vault_backend` | `filesystem` | `CODE_FACTORY_VAULT_BACKEND` | Storage backend: `filesystem` or `sqlite` |
+| `vault_fs.git` | `false` | `CODE_FACTORY_VAULT_FS_GIT` | Enable git tracking (filesystem backend only) |
 | `request_limit` | `25` | `CODE_FACTORY_REQUEST_LIMIT` | Max pydantic-ai requests per run |
 
 ## Training Environments
@@ -87,6 +88,22 @@ Prefer LSP tool over grep/bash for Python code navigation:
 - **Type info**: `hover` instead of reading source
 
 Fall back to grep only for string literals, config values, or when LSP returns no results.
+
+## Hugging Face
+
+HF account: `tfukkwang`. Two repos for gitignored artifacts:
+
+| Repo | Type | Contents |
+|------|------|----------|
+| [`tfukkwang/code-factory-models`](https://huggingface.co/tfukkwang/code-factory-models) | model | Production weights (GGUF quant, full safetensors, LoRA adapter) |
+| [`tfukkwang/code-factory-training`](https://huggingface.co/datasets/tfukkwang/code-factory-training) | dataset | `scripts/` and `training_data/` |
+
+Upload/resume: `.venv-train/bin/hf upload tfukkwang/code-factory-models models/<dir> <dir> --exclude '*.cache*'`
+
+Model dirs on HF:
+- `monty-coder-gguf_gguf/` — Q4_K_M GGUF (production, used by `serve.sh`)
+- `monty-coder-gguf/` — full merged safetensors
+- `monty-coder-lora/` — LoRA adapter (partial upload, resume with command above)
 
 ## Sensitive
 

@@ -9,7 +9,7 @@ from pydantic_ai.settings import ModelSettings
 from ..config import Settings, get_settings, resolve_model
 from ..sandbox.registry import get_descriptions as _get_host_descriptions
 from ..sandbox.runner import run_tests
-from ..vault.manager import VaultManager
+from ..vault.storage import VaultStorage
 from ..vault.models import TicketStatus
 from .code_utils import (
     clean_llm_code,
@@ -27,7 +27,7 @@ from .test_writer import build_test_writer
 
 @dataclass
 class FactoryDeps:
-    vault: VaultManager
+    vault: VaultStorage
     settings: Settings
     interactive: bool = True
     current_ticket_id: str | None = None
@@ -318,15 +318,9 @@ Available host functions:
     async def peek_result(ctx: RunContext[FactoryDeps], ticket_id: str,
                           max_chars: int = 500) -> str:
         """Get the latest run output for a ticket. Call after generate_code or run_existing to get data for your response to the user."""
-        vault = ctx.deps.vault
-        runs_dir = vault.ticket_dir(ticket_id) / "runs"
-        if not runs_dir.exists():
+        record = ctx.deps.vault.get_latest_run(ticket_id)
+        if not record:
             return f"{ticket_id} has no runs."
-        run_files = sorted(runs_dir.glob("run_*.json"), reverse=True)
-        if not run_files:
-            return f"{ticket_id} has no runs."
-        import json
-        record = json.loads(run_files[0].read_text())
         output = str(record.get("output", ""))
         if len(output) > max_chars:
             output = output[:max_chars] + "... (truncated)"

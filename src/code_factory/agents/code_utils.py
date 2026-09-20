@@ -6,7 +6,7 @@ from typing import Any, Callable
 
 from ..sandbox.registry import get_descriptions as _get_host_descriptions
 from ..sandbox.runner import RunResult, run_solution
-from ..vault.manager import VaultManager
+from ..vault.storage import VaultStorage
 from ..vault.models import RunRecord
 
 _DIM = "\033[2m"
@@ -294,7 +294,7 @@ def validate_output(value: Any, expected_type: str | None = None) -> str | None:
     return None
 
 
-def run_and_record(vault: VaultManager, ticket_id: str, code: str,
+def run_and_record(vault: VaultStorage, ticket_id: str, code: str,
                    allowlist: list[str], inputs: dict | None = None,
                    limits: dict[str, float | int] | None = None,
                    interactive: bool = False,

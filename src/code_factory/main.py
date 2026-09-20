@@ -31,9 +31,9 @@ def _build(args):
 
     from .agents.programmer import FactoryDeps, build_programmer
     from .context.manager import compact_messages, maybe_compact
-    from .vault.manager import VaultManager
+    from .vault import create_vault
 
-    vault = VaultManager(settings.vault_path, git_enabled=settings.vault_git)
+    vault = create_vault(settings)
     deps = FactoryDeps(vault=vault, settings=settings, interactive=sys.stdin.isatty())
     agent = build_programmer(settings)
     return settings, deps, agent, compact_messages, maybe_compact
@@ -44,16 +44,10 @@ def _show_last_result(deps):
     if not tid:
         print("Task completed.")
         return
-    runs_dir = deps.vault.ticket_dir(tid) / "runs"
-    if not runs_dir.exists():
+    data = deps.vault.get_latest_run(tid)
+    if not data:
         print(f"{tid} completed (no run output).")
         return
-    run_files = sorted(runs_dir.glob("run_*.json"), reverse=True)
-    if not run_files:
-        print(f"{tid} completed (no run output).")
-        return
-    import json
-    data = json.loads(run_files[0].read_text())
     output = data.get("output", data.get("error", ""))
     if isinstance(output, str) and len(output) > 1000:
         output = output[:1000] + "..."

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from .sandbox.registry import clear_registry, register_host_function
 
@@ -31,7 +32,8 @@ class CodeFactory:
         sub_base_url: str | None = None,
         sub_api_key: str | None = None,
         vault_path: str | Path = "vault",
-        vault_git: bool = False,
+        vault_backend: Literal["filesystem", "sqlite"] = "filesystem",
+        vault_fs_git: bool = False,
         request_limit: int = 25,
         max_tokens: int = 8192,
         context_window: int = 32768,
@@ -45,7 +47,8 @@ class CodeFactory:
         self.sub_base_url = sub_base_url or base_url
         self.sub_api_key = sub_api_key or api_key
         self.vault_path = Path(vault_path)
-        self.vault_git = vault_git
+        self.vault_backend: Literal["filesystem", "sqlite"] = vault_backend
+        self.vault_fs_git = vault_fs_git
         self.request_limit = request_limit
         self.max_tokens = max_tokens
         self.context_window = context_window
@@ -70,9 +73,9 @@ class CodeFactory:
     def _build(self):
         import os
 
-        from .config import Settings, SandboxLimits
+        from .config import Settings, SandboxLimits, VaultFsSettings
         from .agents.programmer import FactoryDeps, build_programmer
-        from .vault.manager import VaultManager
+        from .vault import create_vault
 
         # ponytail: global registry, single-instance assumption
         clear_registry()
@@ -92,7 +95,8 @@ class CodeFactory:
             openai_base_url=self.base_url,
             openai_api_key=self.api_key,
             vault_path=self.vault_path,
-            vault_git=self.vault_git,
+            vault_backend=self.vault_backend,
+            vault_fs=VaultFsSettings(git=self.vault_fs_git),
             request_limit=self.request_limit,
             max_tokens=self.max_tokens,
             context_window=self.context_window,
@@ -103,7 +107,7 @@ class CodeFactory:
         os.environ.setdefault("OPENAI_BASE_URL", self.base_url)
         os.environ.setdefault("PYDANTIC_AI_NO_BANNER", "1")
 
-        vault = VaultManager(settings.vault_path, git_enabled=settings.vault_git)
+        vault = create_vault(settings)
         agent = build_programmer(settings, model_main=main_model, model_sub=sub_model)
         deps = FactoryDeps(vault=vault, settings=settings)
 
@@ -200,20 +204,14 @@ class CodeFactory:
 
     @staticmethod
     def _show_last_result(deps):
-        import json
         tid = deps.current_ticket_id
         if not tid:
             print("Task completed.")
             return
-        runs_dir = deps.vault.ticket_dir(tid) / "runs"
-        if not runs_dir.exists():
+        data = deps.vault.get_latest_run(tid)
+        if not data:
             print(f"{tid} completed (no run output).")
             return
-        run_files = sorted(runs_dir.glob("run_*.json"), reverse=True)
-        if not run_files:
-            print(f"{tid} completed (no run output).")
-            return
-        data = json.loads(run_files[0].read_text())
         output = data.get("output", data.get("error", ""))
         if isinstance(output, str) and len(output) > 1000:
             output = output[:1000] + "..."

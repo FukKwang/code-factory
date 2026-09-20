@@ -1,5 +1,9 @@
+from __future__ import annotations
+
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
+
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -47,9 +51,15 @@ class SandboxLimits(BaseSettings):
         }
 
 
+class VaultFsSettings(BaseSettings):
+    git: bool = False
+    model_config = SettingsConfigDict(env_prefix="CODE_FACTORY_VAULT_FS_")
+
+
 class Settings(BaseSettings):
     vault_path: Path = Path("vault")
-    vault_git: bool = False
+    vault_backend: Literal["filesystem", "sqlite"] = "filesystem"
+    vault_fs: VaultFsSettings = VaultFsSettings()
 
     provider: str = "ling"
 
